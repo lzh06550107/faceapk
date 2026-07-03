@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">工厂打卡</string>
+    <string name="nav_punch">打卡</string>
+    <string name="nav_records">记录</string>
+    <string name="nav_config">配置</string>
+</resources>

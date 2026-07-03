@@ -1,0 +1,473 @@
+package com.punch.app.db;
+
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+
+import com.punch.app.model.Employee;
+import com.punch.app.model.PunchRecord;
+import com.punch.app.model.SyncQueueItem;
+import com.punch.app.utils.Constants;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+
+public class DatabaseHelper extends SQLiteOpenHelper {
+
+    private static DatabaseHelper instance;
+
+    
+    public static synchronized DatabaseHelper get(Context ctx) {
+        if (instance == null) instance = new DatabaseHelper(ctx.getApplicationContext());
+        return instance;
+    }
+
+    
+    private DatabaseHelper(Context context) {
+        super(context, Constants.DB_NAME, null, Constants.DB_VERSION);
+    }
+
+    
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        // 员工表：保存员工基本信息、人脸图片信息、所属线体以及本地注册状态。
+        db.execSQL("CREATE TABLE IF NOT EXISTS employees (" +
+                "id TEXT PRIMARY KEY, name TEXT NOT NULL, dept TEXT, " +
+                "face_image_url TEXT, face_image_sha256 TEXT, " +
+                "face_version INTEGER DEFAULT 0, face_status TEXT DEFAULT 'enabled', " +
+                "local_face_id TEXT, face_registered INTEGER DEFAULT 0, " +
+                "assigned_line_code TEXT DEFAULT '', assigned_line_name TEXT DEFAULT '', " +
+                "status TEXT DEFAULT 'normal', sync_version INTEGER DEFAULT 0, " +
+                "is_deleted INTEGER DEFAULT 0, updated_at INTEGER DEFAULT 0)");
+
+        // 打卡记录表：保存本地打卡业务数据，以及是否已同步到服务端的状态。
+        db.execSQL("CREATE TABLE IF NOT EXISTS punch_records (" +
+                "id TEXT PRIMARY KEY, client_record_id TEXT NOT NULL UNIQUE, " +
+                "emp_id TEXT NOT NULL, emp_name TEXT NOT NULL, dept TEXT, " +
+                "punch_time INTEGER NOT NULL, punch_date TEXT NOT NULL, " +
+                "punch_type TEXT NOT NULL, shift_name TEXT, line_code TEXT NOT NULL, " +
+                "is_synced INTEGER DEFAULT 0)");
+
+        // 同步队列表：只记录“待同步动作”和关联记录 ID，真正业务数据仍在各自业务表中。
+        // UNIQUE(action, record_id) 防止同一条记录被重复加入相同同步任务。
+        db.execSQL("CREATE TABLE IF NOT EXISTS sync_queue (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "record_id TEXT NOT NULL, action TEXT NOT NULL, " +
+                "retry_count INTEGER DEFAULT 0, created_at INTEGER NOT NULL, " +
+                "last_retry INTEGER, UNIQUE(action, record_id))");
+
+        // 常用索引：优化按线体、打卡日期、同步状态等场景的查询性能。
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_emp_line ON employees(assigned_line_code)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_date ON punch_records(punch_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_sync ON punch_records(is_synced)");
+    }
+
+    
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        if (oldVersion < 3) {
+            migrateEmployeesDropAvatarUrl(db);
+            db.execSQL("DROP INDEX IF EXISTS idx_transfer_sync");
+            db.execSQL("DROP TABLE IF EXISTS transfer_records");
+        }
+        if (oldVersion < 4) {
+            migratePunchRecordsDropTransferColumns(db);
+        }
+        if (oldVersion < 5) {
+            migratePunchRecordsDropIsEarly(db);
+        }
+        if (oldVersion < 6) {
+            migratePunchRecordsSlimColumns(db);
+        }
+    }
+
+    
+    public void upsertEmployee(Employee e) {
+        ContentValues v = new ContentValues();
+        v.put("id", e.id); v.put("name", e.name); v.put("dept", e.dept);
+        v.put("face_image_url", e.faceImageUrl);
+        v.put("face_image_sha256", e.faceImageSha256); v.put("face_version", e.faceVersion);
+        v.put("face_status", e.faceStatus); v.put("local_face_id", e.localFaceId);
+        v.put("face_registered", e.faceRegistered);
+        v.put("assigned_line_code", e.assignedLineCode);
+        v.put("assigned_line_name", e.assignedLineName);
+        v.put("status", e.status); v.put("sync_version", e.syncVersion);
+        v.put("is_deleted", e.isDeleted); v.put("updated_at", e.updatedAt);
+        getWritableDatabase().insertWithOnConflict("employees", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    
+    public void upsertEmployees(List<Employee> list) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            for (Employee e : list) {
+                ContentValues v = new ContentValues();
+                v.put("id", e.id); v.put("name", e.name); v.put("dept", e.dept);
+                v.put("face_image_url", e.faceImageUrl);
+                v.put("face_image_sha256", e.faceImageSha256); v.put("face_version", e.faceVersion);
+                v.put("face_status", e.faceStatus); v.put("local_face_id", e.localFaceId);
+                v.put("face_registered", e.faceRegistered);
+                v.put("assigned_line_code", e.assignedLineCode);
+                v.put("assigned_line_name", e.assignedLineName);
+                v.put("status", e.status); v.put("sync_version", e.syncVersion);
+                v.put("is_deleted", e.isDeleted); v.put("updated_at", e.updatedAt);
+                db.insertWithOnConflict("employees", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    
+    public Employee getEmployee(String id) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM employees WHERE id=?", new String[]{id});
+        try { return c.moveToFirst() ? mapEmployee(c) : null; }
+        finally { c.close(); }
+    }
+
+    
+    public List<Employee> getAllActiveEmployees() {
+        return queryEmployees("is_deleted=0 AND face_status='enabled'", null);
+    }
+
+    public int getActiveEmployeeCount() {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM employees WHERE is_deleted=0 AND face_status='enabled'",
+                null);
+        try {
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        } finally {
+            c.close();
+        }
+    }
+
+    
+    public Map<String, String> getAvailableLines() {
+        Map<String, String> lines = new LinkedHashMap<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT DISTINCT assigned_line_code, assigned_line_name FROM employees " +
+                        "WHERE is_deleted=0 AND assigned_line_code IS NOT NULL AND assigned_line_code<>'' " +
+                        "ORDER BY assigned_line_code ASC",
+                null);
+        try {
+            while (c.moveToNext()) {
+                String lineCode = c.getString(c.getColumnIndexOrThrow("assigned_line_code"));
+                String lineName = c.getString(c.getColumnIndexOrThrow("assigned_line_name"));
+                lines.put(lineCode, lineName == null ? "" : lineName);
+            }
+        } finally {
+            c.close();
+        }
+        return lines;
+    }
+
+    
+    public List<Employee> getEmployeesByLine(String lineCode) {
+        return queryEmployees("assigned_line_code=? AND is_deleted=0", new String[]{lineCode});
+    }
+
+    
+    public List<Employee> getUnregisteredFaces() {
+        return queryEmployees(
+                "face_registered=0 AND is_deleted=0 AND face_status='enabled' AND face_image_url IS NOT NULL",
+                null);
+    }
+
+    
+    public void updateFaceRegistration(String empId, String localFaceId, boolean registered) {
+        ContentValues v = new ContentValues();
+        v.put("local_face_id", localFaceId);
+        v.put("face_registered", registered ? 1 : 0);
+        getWritableDatabase().update("employees", v, "id=?", new String[]{empId});
+    }
+
+    
+    public void updateEmployeeLineAssignment(String empId, String lineCode, String lineName) {
+        ContentValues v = new ContentValues();
+        v.put("assigned_line_code", lineCode);
+        v.put("assigned_line_name", lineName);
+        getWritableDatabase().update("employees", v, "id=?", new String[]{empId});
+    }
+
+    
+    public void markEmployeesDeleted(List<String> ids) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            ContentValues v = new ContentValues(); v.put("is_deleted", 1);
+            for (String id : ids) db.update("employees", v, "id=?", new String[]{id});
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    public void markEmployeeDeleted(String id, long updatedAt) {
+        if (id == null || id.trim().isEmpty()) {
+            return;
+        }
+        ContentValues v = new ContentValues();
+        v.put("is_deleted", 1);
+        if (updatedAt > 0) {
+            v.put("updated_at", updatedAt);
+        }
+        getWritableDatabase().update("employees", v, "id=?", new String[]{id});
+    }
+
+    
+    private List<Employee> queryEmployees(String where, String[] args) {
+        List<Employee> list = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM employees" + (where != null ? " WHERE " + where : ""), args);
+        try { while (c.moveToNext()) list.add(mapEmployee(c)); }
+        finally { c.close(); }
+        return list;
+    }
+
+    
+    private Employee mapEmployee(Cursor c) {
+        Employee e = new Employee();
+        e.id = c.getString(c.getColumnIndexOrThrow("id"));
+        e.name = c.getString(c.getColumnIndexOrThrow("name"));
+        e.dept = c.getString(c.getColumnIndexOrThrow("dept"));
+        e.faceImageUrl = c.getString(c.getColumnIndexOrThrow("face_image_url"));
+        e.faceImageSha256 = c.getString(c.getColumnIndexOrThrow("face_image_sha256"));
+        e.faceVersion = c.getInt(c.getColumnIndexOrThrow("face_version"));
+        e.faceStatus = c.getString(c.getColumnIndexOrThrow("face_status"));
+        e.localFaceId = c.getString(c.getColumnIndexOrThrow("local_face_id"));
+        e.faceRegistered = c.getInt(c.getColumnIndexOrThrow("face_registered"));
+        e.assignedLineCode = c.getString(c.getColumnIndexOrThrow("assigned_line_code"));
+        e.assignedLineName = c.getString(c.getColumnIndexOrThrow("assigned_line_name"));
+        e.status = c.getString(c.getColumnIndexOrThrow("status"));
+        e.syncVersion = c.getInt(c.getColumnIndexOrThrow("sync_version"));
+        e.isDeleted = c.getInt(c.getColumnIndexOrThrow("is_deleted"));
+        e.updatedAt = c.getLong(c.getColumnIndexOrThrow("updated_at"));
+        return e;
+    }
+
+    
+    public boolean insertPunchRecord(PunchRecord r) {
+        ContentValues v = new ContentValues();
+        v.put("id", r.id); v.put("client_record_id", r.clientRecordId);
+        v.put("emp_id", r.empId); v.put("emp_name", r.empName); v.put("dept", r.dept);
+        v.put("punch_time", r.punchTime); v.put("punch_date", r.punchDate);
+        v.put("punch_type", r.punchType);
+        v.put("shift_name", r.shiftName); v.put("line_code", r.lineCode);
+        v.put("is_synced", r.isSynced);
+        long result = getWritableDatabase().insertWithOnConflict("punch_records", null, v,
+                SQLiteDatabase.CONFLICT_IGNORE);
+        return result != -1;
+    }
+
+    
+    public List<PunchRecord> getPunchRecordsByDate(String date, String lineCode) {
+        List<PunchRecord> list = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM punch_records WHERE punch_date=? AND line_code=? ORDER BY punch_time DESC",
+                new String[]{date, lineCode});
+        try { while (c.moveToNext()) list.add(mapPunch(c)); }
+        finally { c.close(); }
+        return list;
+    }
+
+    
+    public List<PunchRecord> getUnsyncedPunchRecords() {
+        List<PunchRecord> list = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM punch_records WHERE is_synced=0 ORDER BY punch_time ASC", null);
+        try { while (c.moveToNext()) list.add(mapPunch(c)); }
+        finally { c.close(); }
+        return list;
+    }
+
+    
+    public void markPunchSynced(String id) {
+        ContentValues v = new ContentValues();
+        v.put("is_synced", 1);
+        getWritableDatabase().update("punch_records", v, "id=?", new String[]{id});
+    }
+
+    
+    private PunchRecord mapPunch(Cursor c) {
+        PunchRecord r = new PunchRecord();
+        r.id = c.getString(c.getColumnIndexOrThrow("id"));
+        r.clientRecordId = c.getString(c.getColumnIndexOrThrow("client_record_id"));
+        r.empId = c.getString(c.getColumnIndexOrThrow("emp_id"));
+        r.empName = c.getString(c.getColumnIndexOrThrow("emp_name"));
+        r.dept = c.getString(c.getColumnIndexOrThrow("dept"));
+        r.punchTime = c.getLong(c.getColumnIndexOrThrow("punch_time"));
+        r.punchDate = c.getString(c.getColumnIndexOrThrow("punch_date"));
+        r.punchType = c.getString(c.getColumnIndexOrThrow("punch_type"));
+        r.shiftName = c.getString(c.getColumnIndexOrThrow("shift_name"));
+        r.lineCode = c.getString(c.getColumnIndexOrThrow("line_code"));
+        r.isSynced = c.getInt(c.getColumnIndexOrThrow("is_synced"));
+        return r;
+    }
+
+    
+    public void enqueueSyncItem(String recordId, String action) {
+        ContentValues v = new ContentValues();
+        v.put("record_id", recordId); v.put("action", action);
+        v.put("retry_count", 0); v.put("created_at", System.currentTimeMillis() / 1000);
+        getWritableDatabase().insertWithOnConflict("sync_queue", null, v,
+                SQLiteDatabase.CONFLICT_IGNORE);
+    }
+
+    
+    public List<SyncQueueItem> getSyncQueue(String action) {
+        List<SyncQueueItem> list = new ArrayList<>();
+        String where = action != null ? " WHERE action=?" : "";
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM sync_queue" + where + " ORDER BY created_at ASC",
+                action != null ? new String[]{action} : null);
+        try {
+            while (c.moveToNext()) {
+                SyncQueueItem item = new SyncQueueItem();
+                item.id = c.getInt(c.getColumnIndexOrThrow("id"));
+                item.recordId = c.getString(c.getColumnIndexOrThrow("record_id"));
+                item.action = c.getString(c.getColumnIndexOrThrow("action"));
+                item.retryCount = c.getInt(c.getColumnIndexOrThrow("retry_count"));
+                item.createdAt = c.getLong(c.getColumnIndexOrThrow("created_at"));
+                item.lastRetry = c.getLong(c.getColumnIndexOrThrow("last_retry"));
+                list.add(item);
+            }
+        } finally { c.close(); }
+        return list;
+    }
+
+    
+    public void removeSyncQueueItem(int id) {
+        getWritableDatabase().delete("sync_queue", "id=?", new String[]{String.valueOf(id)});
+    }
+
+    
+    public void incrementSyncRetry(int id) {
+        getWritableDatabase().execSQL(
+                "UPDATE sync_queue SET retry_count=retry_count+1, last_retry=? WHERE id=?",
+                new Object[]{System.currentTimeMillis() / 1000, id});
+    }
+
+    
+    public int getPendingCount() {
+        Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM sync_queue", null);
+        try { return c.moveToFirst() ? c.getInt(0) : 0; }
+        finally { c.close(); }
+    }
+
+    
+    public List<String> getSignedEmpIds(String date, String lineCode) {
+        List<String> ids = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT DISTINCT emp_id FROM punch_records WHERE punch_date=? AND line_code=?",
+                new String[]{date, lineCode});
+        try { while (c.moveToNext()) ids.add(c.getString(0)); }
+        finally { c.close(); }
+        return ids;
+    }
+
+    
+    public void clearLocalBusinessData() {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete("sync_queue", null, null);
+            db.delete("punch_records", null, null);
+            db.delete("employees", null, null);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    private void migrateEmployeesDropAvatarUrl(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE employees RENAME TO employees_legacy_v2");
+        db.execSQL("CREATE TABLE IF NOT EXISTS employees (" +
+                "id TEXT PRIMARY KEY, name TEXT NOT NULL, dept TEXT, " +
+                "face_image_url TEXT, face_image_sha256 TEXT, " +
+                "face_version INTEGER DEFAULT 0, face_status TEXT DEFAULT 'enabled', " +
+                "local_face_id TEXT, face_registered INTEGER DEFAULT 0, " +
+                "assigned_line_code TEXT DEFAULT '', assigned_line_name TEXT DEFAULT '', " +
+                "status TEXT DEFAULT 'normal', sync_version INTEGER DEFAULT 0, " +
+                "is_deleted INTEGER DEFAULT 0, updated_at INTEGER DEFAULT 0)");
+        db.execSQL("INSERT INTO employees (" +
+                "id, name, dept, face_image_url, face_image_sha256, face_version, face_status, " +
+                "local_face_id, face_registered, assigned_line_code, assigned_line_name, " +
+                "status, sync_version, is_deleted, updated_at) " +
+                "SELECT id, name, dept, face_image_url, face_image_sha256, face_version, face_status, " +
+                "local_face_id, face_registered, assigned_line_code, assigned_line_name, " +
+                "status, sync_version, is_deleted, updated_at " +
+                "FROM employees_legacy_v2");
+        db.execSQL("DROP TABLE employees_legacy_v2");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_emp_line ON employees(assigned_line_code)");
+    }
+
+    private void migratePunchRecordsDropTransferColumns(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE punch_records RENAME TO punch_records_legacy_v3");
+        db.execSQL("CREATE TABLE IF NOT EXISTS punch_records (" +
+                "id TEXT PRIMARY KEY, client_record_id TEXT NOT NULL UNIQUE, " +
+                "emp_id TEXT NOT NULL, emp_name TEXT NOT NULL, dept TEXT, " +
+                "punch_time INTEGER NOT NULL, punch_date TEXT NOT NULL, " +
+                "punch_index INTEGER NOT NULL, punch_type TEXT NOT NULL, " +
+                "shift_name TEXT, line_code TEXT NOT NULL, line_name TEXT NOT NULL, " +
+                "device_id TEXT NOT NULL, status TEXT DEFAULT 'normal', " +
+                "is_early INTEGER DEFAULT 0, is_synced INTEGER DEFAULT 0, " +
+                "sync_time INTEGER, server_id TEXT)");
+        db.execSQL("INSERT INTO punch_records (" +
+                "id, client_record_id, emp_id, emp_name, dept, punch_time, punch_date, " +
+                "punch_index, punch_type, shift_name, line_code, line_name, device_id, " +
+                "status, is_early, is_synced, sync_time, server_id) " +
+                "SELECT id, client_record_id, emp_id, emp_name, dept, punch_time, punch_date, " +
+                "punch_index, punch_type, shift_name, line_code, line_name, device_id, " +
+                "status, is_early, is_synced, sync_time, server_id " +
+                "FROM punch_records_legacy_v3");
+        db.execSQL("DROP TABLE punch_records_legacy_v3");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_date ON punch_records(punch_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_sync ON punch_records(is_synced)");
+    }
+
+    private void migratePunchRecordsDropIsEarly(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE punch_records RENAME TO punch_records_legacy_v4");
+        db.execSQL("CREATE TABLE IF NOT EXISTS punch_records (" +
+                "id TEXT PRIMARY KEY, client_record_id TEXT NOT NULL UNIQUE, " +
+                "emp_id TEXT NOT NULL, emp_name TEXT NOT NULL, dept TEXT, " +
+                "punch_time INTEGER NOT NULL, punch_date TEXT NOT NULL, " +
+                "punch_index INTEGER NOT NULL, punch_type TEXT NOT NULL, " +
+                "shift_name TEXT, line_code TEXT NOT NULL, line_name TEXT NOT NULL, " +
+                "device_id TEXT NOT NULL, status TEXT DEFAULT 'normal', " +
+                "is_synced INTEGER DEFAULT 0, sync_time INTEGER, server_id TEXT)");
+        db.execSQL("INSERT INTO punch_records (" +
+                "id, client_record_id, emp_id, emp_name, dept, punch_time, punch_date, " +
+                "punch_index, punch_type, shift_name, line_code, line_name, device_id, " +
+                "status, is_synced, sync_time, server_id) " +
+                "SELECT id, client_record_id, emp_id, emp_name, dept, punch_time, punch_date, " +
+                "punch_index, punch_type, shift_name, line_code, line_name, device_id, " +
+                "status, is_synced, sync_time, server_id " +
+                "FROM punch_records_legacy_v4");
+        db.execSQL("DROP TABLE punch_records_legacy_v4");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_date ON punch_records(punch_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_sync ON punch_records(is_synced)");
+    }
+
+    private void migratePunchRecordsSlimColumns(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE punch_records RENAME TO punch_records_legacy_v5");
+        db.execSQL("CREATE TABLE IF NOT EXISTS punch_records (" +
+                "id TEXT PRIMARY KEY, client_record_id TEXT NOT NULL UNIQUE, " +
+                "emp_id TEXT NOT NULL, emp_name TEXT NOT NULL, dept TEXT, " +
+                "punch_time INTEGER NOT NULL, punch_date TEXT NOT NULL, " +
+                "punch_type TEXT NOT NULL, shift_name TEXT, line_code TEXT NOT NULL, " +
+                "is_synced INTEGER DEFAULT 0)");
+        db.execSQL("INSERT INTO punch_records (" +
+                "id, client_record_id, emp_id, emp_name, dept, punch_time, punch_date, " +
+                "punch_type, shift_name, line_code, is_synced) " +
+                "SELECT id, client_record_id, emp_id, emp_name, dept, punch_time, punch_date, " +
+                "punch_type, shift_name, line_code, is_synced " +
+                "FROM punch_records_legacy_v5");
+        db.execSQL("DROP TABLE punch_records_legacy_v5");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_date ON punch_records(punch_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_sync ON punch_records(is_synced)");
+    }
+}

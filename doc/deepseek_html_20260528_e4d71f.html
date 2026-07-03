@@ -1,0 +1,1400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>工厂手持打卡 · 人脸自动签到</title>
+    <style>
+        :root {
+            --primary: #0d5fa8;
+            --primary-light: #1a7cc4;
+            --success: #2e7d32;
+            --warning: #ef6c00;
+            --danger: #c62828;
+            --bg: #eef2f6;
+            --card: #ffffff;
+            --text: #1d1d1f;
+            --text-secondary: #5f6368;
+            --border: #dde1e6;
+            --shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+            --radius: 14px;
+            --radius-sm: 10px;
+            --nav-height: 60px;
+            --header-height: 48px;
+            --font-xs: 11px;
+            --font-sm: 13px;
+            --font-md: 15px;
+            --font-lg: 18px;
+            --font-xl: 22px;
+            --transition: 0.2s ease;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .phone-frame {
+            width: 100%;
+            max-width: 420px;
+            height: 100vh;
+            max-height: 860px;
+            background: #0d0d0d;
+            border-radius: 24px;
+            padding: 8px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 0 3px #222, 0 0 0 6px #1a1a1a;
+            display: flex;
+            flex-direction: column;
+        }
+        @media (max-width: 440px) {
+            .phone-frame {
+                max-width: 100%;
+                border-radius: 0;
+                padding: 0;
+                box-shadow: none;
+                max-height: 100vh;
+                height: 100vh;
+            }
+        }
+        .phone-screen {
+            flex: 1;
+            background: var(--bg);
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        @media (max-width: 440px) {
+            .phone-screen {
+                border-radius: 0;
+            }
+        }
+
+        .status-bar {
+            height: 26px;
+            background: #071526;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            font-size: 10px;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+        .status-icons {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #4caf50;
+            display: inline-block;
+        }
+
+        .page {
+            display: none;
+            flex: 1;
+            flex-direction: column;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            background: var(--bg);
+        }
+        .page.active {
+            display: flex;
+        }
+        .page-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 14px 16px;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .top-bar {
+            height: var(--header-height);
+            background: var(--primary);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            flex-shrink: 0;
+            font-size: var(--font-md);
+            font-weight: 600;
+            gap: 8px;
+        }
+        .top-bar .title {
+            flex: 1;
+            text-align: center;
+        }
+        .top-bar .user-tag {
+            font-size: 11px;
+            background: rgba(255,255,255,0.2);
+            padding: 4px 10px;
+            border-radius: 20px;
+        }
+
+        .login-page {
+            background: linear-gradient(180deg, #0b1f36 0%, #103250 30%, #eef2f6 30%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 70px;
+        }
+        .login-logo {
+            width: 70px;
+            height: 70px;
+            background: #fff;
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 34px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            margin-bottom: 8px;
+        }
+        .login-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 1px;
+        }
+        .login-subtitle {
+            font-size: 11px;
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 28px;
+        }
+        .login-card {
+            background: #fff;
+            border-radius: var(--radius);
+            padding: 22px 18px;
+            width: 85%;
+            box-shadow: var(--shadow);
+        }
+        .input-group {
+            margin-bottom: 14px;
+        }
+        .input-group label {
+            display: block;
+            font-size: var(--font-sm);
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+        .input-group input {
+            width: 100%;
+            height: 44px;
+            border: 2px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0 12px;
+            font-size: var(--font-md);
+            background: #f8f9fb;
+            transition: var(--transition);
+            color: var(--text);
+        }
+        .input-group input:focus {
+            border-color: var(--primary);
+            outline: none;
+            background: #fff;
+        }
+        .btn {
+            width: 100%;
+            height: 46px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: var(--font-md);
+            font-weight: 600;
+            cursor: pointer;
+            letter-spacing: 0.5px;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .btn:active {
+            transform: scale(0.97);
+            opacity: 0.85;
+        }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-warning { background: var(--warning); color: #fff; }
+        .btn-outline { background: #fff; color: var(--primary); border: 2px solid var(--primary); }
+        .btn-sm { height: 34px; font-size: var(--font-xs); padding: 0 14px; width: auto; border-radius: 8px; }
+        .btn-xs { height: 28px; font-size: 10px; padding: 0 10px; width: auto; border-radius: 6px; }
+        .btn-danger { background: var(--danger); color: #fff; }
+
+        .bottom-nav {
+            height: var(--nav-height);
+            background: #fff;
+            display: flex;
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+            box-shadow: 0 -1px 6px rgba(0,0,0,0.04);
+        }
+        .nav-item {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: #889099;
+            transition: var(--transition);
+            font-size: 10px;
+            gap: 3px;
+            border: none;
+            background: none;
+            position: relative;
+        }
+        .nav-item.active { color: var(--primary); font-weight: 600; }
+        .nav-item.active::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 25%; right: 25%; height: 3px;
+            background: var(--primary); border-radius: 0 0 3px 3px;
+        }
+        .nav-icon { font-size: 20px; line-height: 1; }
+
+        .card {
+            background: #fff;
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            margin-bottom: 12px;
+            box-shadow: var(--shadow);
+        }
+        .card-header {
+            font-weight: 600;
+            font-size: var(--font-md);
+            color: var(--text);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .badge {
+            font-size: 10px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+        .badge-success { background: #e8f5e9; color: #2e7d32; }
+        .badge-warning { background: #fff3e0; color: #e65100; }
+        .badge-gray { background: #f5f5f5; color: #555; }
+
+        .face-scan-area {
+            width: 100%;
+            height: 55vh;
+            background: #0a0a0a;
+            border-radius: var(--radius);
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 10px;
+            border: 2px solid #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .camera-view {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            background: radial-gradient(ellipse at center, #2a2a2a 0%, #0d0d0d 100%);
+        }
+        .face-frame {
+            position: absolute;
+            top: 18%; left: 22%; right: 22%; bottom: 15%;
+            border: 2px dashed rgba(76, 175, 80, 0.7);
+            border-radius: 50% / 55%;
+            pointer-events: none;
+            animation: pulse-frame 2s infinite;
+        }
+        @keyframes pulse-frame {
+            0%,100% { border-color: rgba(76,175,80,0.5); box-shadow: 0 0 0 0 rgba(76,175,80,0.2); }
+            50% { border-color: rgba(76,175,80,0.9); box-shadow: 0 0 20px 4px rgba(76,175,80,0.35); }
+        }
+        .scan-status-text {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.75);
+            color: #fff;
+            padding: 5px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            transition: 0.3s;
+        }
+        .scan-status-text.success { background: rgba(46,125,50,0.85); }
+        .scan-status-text.error { background: rgba(198,40,40,0.85); }
+
+        .recognized-card {
+            background: #fff;
+            border-radius: var(--radius);
+            padding: 16px;
+            text-align: center;
+            box-shadow: var(--shadow);
+            margin-bottom: 10px;
+        }
+        .recognized-avatar {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 6px;
+            background: var(--primary);
+        }
+        .recognized-name { font-size: var(--font-lg); font-weight: 700; }
+        .recognized-dept { font-size: var(--font-sm); color: var(--text-secondary); margin-bottom: 4px; }
+        .recognized-status { font-size: 13px; font-weight: 600; margin-top: 4px; }
+
+        .record-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 14px;
+            background: #fff;
+            border-radius: var(--radius-sm);
+            margin-bottom: 8px;
+            gap: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .record-avatar {
+            width: 40px; height: 40px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 14px; color: #fff; flex-shrink: 0;
+        }
+        .record-info { flex: 1; }
+        .record-name { font-weight: 600; font-size: var(--font-sm); }
+        .record-detail { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+        .config-section { margin-bottom: 16px; }
+        .config-section-title {
+            font-size: var(--font-sm); font-weight: 700; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;
+        }
+        .config-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 11px 0; border-bottom: 1px solid #f0f0f0; gap: 10px;
+        }
+        .config-row:last-child { border-bottom: none; }
+        .config-label { font-size: var(--font-sm); font-weight: 500; }
+        .toggle-switch {
+            position: relative; width: 46px; height: 26px; flex-shrink: 0; cursor: pointer;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: #c4c9ce; border-radius: 26px; transition: var(--transition);
+        }
+        .toggle-slider::before {
+            content: ''; position: absolute; width: 20px; height: 20px; left: 3px; bottom: 3px;
+            background: #fff; border-radius: 50%; transition: var(--transition); box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .toggle-switch input:checked+.toggle-slider { background: var(--primary); }
+        .toggle-switch input:checked+.toggle-slider::before { transform: translateX(20px); }
+
+        .toast {
+            position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+            background: #333; color: #fff; padding: 10px 20px; border-radius: 20px;
+            font-size: 13px; z-index: 200; pointer-events: none;
+            animation: toastIn 0.3s ease, toastOut 0.3s ease 1.8s forwards; white-space: nowrap;
+        }
+        @keyframes toastIn { from { opacity:0; transform: translateX(-50%) translateY(-20px); } to { opacity:1; transform: translateX(-50%) translateY(0); } }
+        @keyframes toastOut { from { opacity:1; } to { opacity:0; transform: translateX(-50%) translateY(-20px); } }
+
+        .tab-toggle { display: flex; gap: 4px; margin-bottom: 10px; align-items: center; }
+        .tab-toggle select {
+            height: 34px; border: 2px solid #ddd; border-radius: 8px;
+            background: #fff; font-size: 13px; cursor: pointer; transition: var(--transition);
+            font-weight: 500; color: #666; padding: 0 28px 0 10px;
+            appearance: none; -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 8px center;
+            min-width: 120px;
+        }
+        .tab-toggle select:focus { outline: none; border-color: var(--primary); }
+        .tab-toggle .toggle-btn {
+            flex: 1; height: 34px; border: 2px solid #ddd; border-radius: 8px;
+            background: #fff; font-size: 13px; cursor: pointer; transition: var(--transition);
+            font-weight: 500; color: #666;
+        }
+        .tab-toggle .toggle-btn.active {
+            border-color: var(--primary); background: var(--primary); color: #fff; font-weight: 600;
+        }
+        /* 识别成功弹窗 */
+        .face-result-modal {
+            position: fixed; top:0; left:0; right:0; bottom:0; z-index: 200;
+            background: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center;
+        }
+        .face-result-card {
+            background: #fff; border-radius: 20px; padding: 32px 24px; width: 280px;
+            text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+            animation: faceResultIn 0.3s ease;
+        }
+        @keyframes faceResultIn {
+            from { transform: scale(0.7); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .face-result-icon { font-size: 56px; margin-bottom: 8px; }
+        .face-result-title { font-size: 18px; font-weight: 700; color: #2e7d32; margin-bottom: 16px; }
+        .face-result-avatar {
+            width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 28px; font-weight: 700; color: #fff;
+        }
+        .face-result-name { font-size: 18px; font-weight: 700; color: #333; margin-bottom: 4px; }
+        .face-result-dept { font-size: 12px; color: #888; margin-bottom: 8px; }
+        .face-result-time { font-size: 13px; color: #555; margin: 8px 0; }
+        .face-result-hint { font-size: 11px; color: #aaa; margin-top: 6px; }
+        .transfer-modal {
+            position: fixed; top:0; left:0; right:0; bottom:0; z-index: 300;
+            background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center;
+            padding: 16px;
+        }
+        .transfer-modal.show { display: flex; }
+        .transfer-card {
+            background: #fff; border-radius: 16px; padding: 20px; width: 100%; max-width: 360px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .transfer-card .card-title {
+            font-size: 16px; font-weight: 700; text-align: center; margin-bottom: 16px; color: var(--text);
+        }
+        .transfer-card .emp-row {
+            display: flex; align-items: center; gap: 12px; padding: 12px;
+            background: #f8f9fb; border-radius: 10px; margin-bottom: 10px;
+        }
+        .transfer-card .emp-info { flex: 1; }
+        .transfer-card .emp-name { font-weight: 600; font-size: 14px; }
+        .transfer-card .emp-dept { font-size: 11px; color: #888; }
+        .transfer-card .emp-line { font-size: 11px; color: #c62828; }
+        .modal-btns { display: flex; gap: 10px; margin-top: 16px; }
+        .modal-btns .btn { flex: 1; }
+        .employee-list-item {
+            display: flex; align-items: center; gap: 10px; padding: 10px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .employee-list-item:last-child { border-bottom: none; }
+        .employee-list-item .emp-avatar {
+            width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center;
+            justify-content: center; font-weight: 700; font-size: 13px; color: #fff; flex-shrink: 0;
+        }
+        .employee-list-item .emp-info { flex: 1; }
+        .employee-list-item .emp-name { font-weight: 600; font-size: 13px; }
+        .employee-list-item .emp-meta { font-size: 11px; color: #888; margin-top: 2px; }
+        .employee-list-item .emp-line-tag {
+            font-size: 11px; padding: 3px 8px; border-radius: 20px; font-weight: 500;
+        }
+        .emp-line-current { background: #e3f2fd; color: var(--primary); }
+        .emp-line-other { background: #fce4ec; color: #c62828; }
+        .punch-type-btns { display: flex; gap: 8px; margin-bottom: 10px; }
+        .punch-type-btns .type-btn {
+            flex: 1; height: 40px; border: 2px solid #ddd; border-radius: 10px;
+            background: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: var(--transition);
+            color: #666;
+        }
+        .punch-type-btns .type-btn.active {
+            border-color: var(--success); background: #e8f5e9; color: var(--success);
+        }
+        .punch-type-btns .type-btn.active.type-checkout {
+            border-color: var(--warning); background: #fff3e0; color: var(--warning);
+        }
+        .baidu-params-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 0; border-bottom: 1px solid #f0f0f0; gap: 10px;
+        }
+        .baidu-params-row:last-child { border-bottom: none; }
+        .baidu-params-row .param-label { font-size: var(--font-sm); font-weight: 500; flex: 1; }
+        .baidu-params-row input[type="range"] {
+            width: 100px; accent-color: var(--primary);
+        }
+        .baidu-params-row .param-val {
+            font-size: 12px; font-weight: 600; color: var(--primary); min-width: 36px; text-align: right;
+        }
+        .baidu-params-row input[type="number"] {
+            width: 60px; height: 30px; border: 1px solid #ddd; border-radius: 6px;
+            text-align: center; font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+<div class="phone-frame">
+    <div class="phone-screen">
+        <div class="status-bar">
+            <span id="statusTime">08:30</span>
+            <div class="status-icons"><span class="status-dot"></span> WiFi <span>🔋92%</span></div>
+        </div>
+
+        <!-- 登录页 -->
+        <div class="page active login-page" id="loginPage">
+            <div class="login-logo">🏭</div>
+            <div class="login-title">工厂手持打卡</div>
+            <div class="login-subtitle">Face Recognition Auto Check-in</div>
+            <div class="login-card">
+                <div class="input-group">
+                    <label>账号</label>
+                    <input type="text" id="loginUser" placeholder="请输入账号" value="admin">
+                </div>
+                <div class="input-group">
+                    <label>密码</label>
+                    <input type="password" id="loginPass" placeholder="请输入密码" value="123456">
+                </div>
+                <button class="btn btn-primary" onclick="handleLogin()">🔐 登 录</button>
+                <p style="font-size:10px;color:#999;text-align:center;margin-top:10px;">默认 admin / 123456</p>
+            </div>
+        </div>
+
+        <!-- 主界面 -->
+        <div class="page" id="mainPage">
+            <div class="top-bar">
+                <span>📱</span>
+                <span class="title" id="headerLineName">线体A-1</span>
+                <span class="user-tag" id="headerUser">admin</span>
+            </div>
+
+            <!-- 打卡Tab -->
+            <div class="page-content" id="tabPunch">
+                <!-- 人脸扫描区 -->
+                <div class="face-scan-area" id="faceScanArea">
+                    <div class="camera-view">
+                        <span style="font-size:80px;opacity:0.4;">👤</span>
+                        <div class="face-frame"></div>
+                        <div class="scan-status-text" id="scanStatusText">准备就绪</div>
+                    </div>
+                </div>
+
+                <!-- 识别成功弹窗 -->
+                <div class="face-result-modal" id="faceResultModal">
+                    <div class="face-result-card" id="faceResultCard">
+                        <div class="face-result-icon" id="faceResultIcon">&#x2705;</div>
+                        <div class="face-result-title" id="faceResultTitle">识别成功</div>
+                        <div class="face-result-avatar" id="faceResultAvatar">张</div>
+                        <div class="face-result-name" id="faceResultName">--</div>
+                        <div class="face-result-dept" id="faceResultDept">--</div>
+                        <div id="faceResultBadge"></div>
+                        <div class="face-result-time" id="faceResultTime"></div>
+                        <div class="face-result-hint" id="faceResultHint"></div>
+                    </div>
+                </div>
+                <div class="card" style="padding:10px 14px;">
+                    <div style="display:flex; align-items:center; gap:8px; font-size:13px; flex-wrap:wrap;">
+                        <span>班组:</span>
+                        <span id="teamDisplay" style="font-weight:600;color:var(--primary);">—</span>
+                        <span style="color:#555;">线体:</span>
+                        <span style="font-weight:600;color:var(--primary);" id="currentLineBadge">线体A-1</span>
+                    </div>
+                    <div id="teamTimeRange" style="margin-top:8px;padding:8px 10px;background:#f0f4ff;border-radius:8px;font-size:12px;color:var(--primary);display:none;">
+                        <span style="font-weight:600;">&#x23F0; 打卡时间段:</span>
+                        <span id="teamTimeRangeText"></span>
+                    </div>
+                </div>
+                  <!-- 时间选择 -->
+                  <div class="card" style="padding:12px 14px;">
+                    <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+                        <span>&#x23F0; 打卡时间:</span>
+                        <input type="time" id="punchTimeInput" style="flex:1; height:38px; border:2px solid var(--primary); border-radius:8px; padding:0 12px; font-size:15px; font-weight:600; color:var(--primary); background:#e3f2fd;" readonly>
+                        <button class="btn btn-sm btn-outline" style="height:38px;padding:0 10px;font-size:12px;" onclick="confirmCustomTime()">&#x270F; 自定义</button>
+                        <button class="btn btn-sm btn-primary" style="height:38px;padding:0 10px;font-size:12px;" onclick="confirmResetTime()">&#x21BA; 重置</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 记录Tab -->
+            <div class="page-content" id="tabRecords" style="display:none;">
+                <div class="tab-toggle" id="recordsFilterRow" style="margin-bottom:8px;">
+                    <select id="punchIndexSelect" onchange="switchPunchIndex(this.value)">
+                        <option value="1">第1次上班打卡</option>
+                        <option value="1">第1次下班打卡</option>
+                        <option value="1">第2次上班打卡</option>
+                        <option value="1">第2次下班打卡</option>
+                        <option value="1">第3次上班打卡</option>
+                        <option value="1">第3次下班打卡</option>
+                    </select>
+                    <button class="toggle-btn active" id="toggleSigned" onclick="switchRecordView('signed')">已签到</button>
+                    <button class="toggle-btn" id="toggleUnsigned" onclick="switchRecordView('unsigned')">未签到</button>
+                </div>
+                <div class="card" style="padding:8px 10px;margin-bottom:8px;">
+                    <span style="font-size:12px;">&#x1F4CB; 统计: 已打卡 <b id="statDone">0</b> | 未打卡 <b id="statMiss">0</b> | 特殊状态 <b id="statSpecial">0</b></span>
+                </div>
+                <div id="recordsList"><p style="color:#999;text-align:center;padding:30px;">暂无打卡记录</p></div>
+            </div>
+
+            <!-- 配置Tab -->
+            <div class="page-content" id="tabConfig" style="display:none;">
+                <div class="config-section">
+                    <div class="config-section-title">&#x1F3ED; 线体绑定</div>
+                    <div class="card">
+                        <div class="config-row">
+                            <span class="config-label">绑定线体</span>
+                            <select id="lineBinding" style="width:130px;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 8px;">
+                                <option>线体A-1</option><option>线体A-2</option><option>线体B-1</option><option>线体B-2</option><option>线体C-1</option>
+                            </select>
+                        </div>
+                        <div class="config-row" style="margin-top:8px;">
+                            <span class="config-label">绑定班组</span>
+                            <select id="teamBinding" style="width:130px;height:34px;border:1px solid #ddd;border-radius:6px;padding:0 8px;" onchange="onTeamBindingChange()">
+                                <option value="A">班组A</option>
+                                <option value="B">班组B</option>
+                                <option value="C">班组C</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-sm btn-primary mt-2" onclick="bindLine()">确认绑定</button>
+                    </div>
+                </div>
+                <div class="config-section">
+                    <div class="config-section-title">&#x1F916; 百度人脸识别参数</div>
+                    <div class="card">
+                        <p style="font-size:11px;color:#888;margin-bottom:10px;">自定义调节人脸识别算法的灵敏度与阈值参数</p>
+                        <div class="baidu-params-row">
+                            <span class="param-label">人脸检测阈值</span>
+                            <input type="range" id="baiduFaceThreshold" min="50" max="99" value="80" oninput="updateBaiduParamDisplay('threshold', this.value)">
+                            <span class="param-val" id="val_threshold">80</span>
+                        </div>
+                        <div class="baidu-params-row">
+                            <span class="param-label">人脸比对阈值</span>
+                            <input type="range" id="baiduMatchThreshold" min="50" max="99" value="72" oninput="updateBaiduParamDisplay('match', this.value)">
+                            <span class="param-val" id="val_match">72</span>
+                        </div>
+                        <div class="baidu-params-row">
+                            <span class="param-label">识别距离(米)</span>
+                            <input type="number" id="baiduRecognizeDistance" value="3" min="1" max="10" style="width:60px;height:30px;border:1px solid #ddd;border-radius:6px;text-align:center;font-size:12px;">
+                        </div>
+                        <div class="baidu-params-row">
+                            <span class="param-label">活体检测</span>
+                            <label class="toggle-switch"><input type="checkbox" id="baiduLivenessCheck" checked><span class="toggle-slider"></span></label>
+                        </div>
+                        <div class="baidu-params-row">
+                            <span class="param-label">戴口罩识别</span>
+                            <label class="toggle-switch"><input type="checkbox" id="baiduMaskDetect" checked><span class="toggle-slider"></span></label>
+                        </div>
+                        <div class="baidu-params-row">
+                            <span class="param-label">识别超时(秒)</span>
+                            <input type="number" id="baiduTimeout" value="5" min="1" max="30" style="width:60px;height:30px;border:1px solid #ddd;border-radius:6px;text-align:center;font-size:12px;">
+                        </div>
+                        <button class="btn btn-sm btn-primary mt-2" onclick="saveBaiduParams()">&#x1F4BE; 保存识别参数</button>
+                    </div>
+                </div>
+                <button class="btn btn-danger mt-3" onclick="handleLogout()">&#x1F6AD; 退出登录</button>
+            </div>
+
+            <div class="bottom-nav">
+                <button class="nav-item active" data-tab="punch" onclick="switchTab('punch')"><span class="nav-icon">📷</span>打卡</button>
+                <button class="nav-item" data-tab="records" onclick="switchTab('records')"><span class="nav-icon">📋</span>记录</button>
+                <button class="nav-item" data-tab="config" onclick="switchTab('config')"><span class="nav-icon">⚙️</span>配置</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="toastContainer"></div>
+
+<!-- 人员调动弹窗 -->
+<div class="transfer-modal" id="transferModal">
+    <div class="transfer-card">
+        <div class="card-title">&#x1F4CB; 人员调动确认</div>
+        <p style="font-size:12px;color:#888;text-align:center;margin-bottom:12px;">以下员工不属于当前线体，是否将其调动至 <b id="transferTargetLine" style="color:var(--primary);"></b>？</p>
+        <div id="transferEmpList"></div>
+        <div class="modal-btns">
+            <button class="btn btn-outline" onclick="closeTransferModal()">取消</button>
+            <button class="btn btn-success" onclick="confirmTransfer()">确认调动</button>
+        </div>
+    </div>
+</div>
+
+<!-- 员工线体管理弹窗 -->
+<div class="transfer-modal" id="empLineModal">
+    <div class="transfer-card">
+        <div class="card-title" id="empLineModalTitle">&#x1F464; 员工线体设置</div>
+        <div style="margin-bottom:10px;">
+            <select id="empLineSelect" style="width:100%;height:36px;border:1px solid #ddd;border-radius:8px;padding:0 10px;font-size:13px;">
+                <option>线体A-1</option><option>线体A-2</option><option>线体B-1</option><option>线体B-2</option><option>线体C-1</option>
+            </select>
+        </div>
+        <div class="modal-btns">
+            <button class="btn btn-outline" onclick="closeEmpLineModal()">取消</button>
+            <button class="btn btn-primary" onclick="confirmEmpLineChange()">保存</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function() {
+        // ---------- 数据定义 ----------
+        const DEFAULT_EMPLOYEES = [
+            { id:'E001', name:'张建国', dept:'组装车间', avatarBg:'#e57373' },
+            { id:'E002', name:'李秀英', dept:'组装车间', avatarBg:'#f06292' },
+            { id:'E003', name:'王德发', dept:'焊接线', avatarBg:'#ba68c8' },
+            { id:'E004', name:'赵铁柱', dept:'焊接线', avatarBg:'#64b5f6' },
+            { id:'E005', name:'钱小梅', dept:'质检组', avatarBg:'#4fc3f7' },
+            { id:'E006', name:'孙大伟', dept:'质检组', avatarBg:'#4dd0e1' },
+            { id:'E007', name:'周建华', dept:'包装线', avatarBg:'#81c784' },
+            { id:'E008', name:'吴桂兰', dept:'包装线', avatarBg:'#aed581' },
+            { id:'E009', name:'郑志强', dept:'组装车间', avatarBg:'#ffb74d' },
+            { id:'E010', name:'冯丽丽', dept:'质检组', avatarBg:'#ff8a65' },
+        ];
+
+        const LINES = ['线体A-1','线体A-2','线体B-1','线体B-2','线体C-1'];
+
+        function getDefaultConfig() {
+            return {
+                deviceAccount: 'admin',
+                devicePassword: '123456',
+                lineBinding: '线体A-1',
+                deviceId: 'PDA-2026-0018',
+                allowLeaveEarly: true,
+                allowRestEarly: true,
+                leaveHours: 4,
+                restHours: 0,
+                earliestPunchTime: '05:00',
+                employeeStatus: {},
+                employeeLines: {},
+                baiduFaceThreshold: 80,
+                baiduMatchThreshold: 72,
+                baiduRecognizeDistance: 3,
+                baiduLivenessCheck: true,
+                baiduMaskDetect: true,
+                baiduTimeout: 5
+            };
+        }
+
+        function loadConfig() {
+            try { return JSON.parse(localStorage.getItem('punchConfig_v3')) || getDefaultConfig(); }
+            catch(e) { return getDefaultConfig(); }
+        }
+        function saveConfig(cfg) { localStorage.setItem('punchConfig_v3', JSON.stringify(cfg)); }
+        function loadRecords() {
+            try { return JSON.parse(localStorage.getItem('punchRecords_v3')) || []; }
+            catch(e) { return []; }
+        }
+        function saveRecords(records) { localStorage.setItem('punchRecords_v3', JSON.stringify(records)); }
+
+        function getEmployees() {
+            const cfg = loadConfig();
+            return DEFAULT_EMPLOYEES.map(emp => ({
+                ...emp,
+                status: cfg.employeeStatus[emp.id] || 'normal',
+                assignedLine: cfg.employeeLines[emp.id] || cfg.lineBinding
+            }));
+        }
+
+        // ---------- 全局状态 ----------
+        let currentUser = '';
+        let isLoggedIn = false;
+        let currentTab = 'punch';
+        let scanning = false;
+        let recordView = 'signed';
+        let punchIndexFilter = 1;
+        let pendingTransferEmps = [];
+        let empLineEditTarget = null;
+
+        // ---------- UI辅助 ----------
+        function speakText(text) {
+            try {
+                var utter = new SpeechSynthesisUtterance(text);
+                utter.lang = 'zh-CN';
+                utter.rate = 1.1;
+                utter.volume = 1;
+                speechSynthesis.cancel();
+                speechSynthesis.speak(utter);
+            } catch(e) {}
+        }
+
+        var timeIsLive = true;
+
+        function getNowTimeStr() {
+            var now = new Date();
+            return String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+        }
+
+        window.confirmResetTime = function() {
+            if(!confirm('\u786E\u8BA4\u8986\u76D6\u4E3A\u5B9E\u65F6\u65F6\u95F4\u5417\uFF1F\u6253\u5361\u5C06\u4F7F\u7528\u5F53\u524D\u65F6\u95F4\u3002')) return;
+            resetToLiveTime();
+        };
+
+        window.confirmCustomTime = function() {
+            if(!confirm('\u786E\u8BA4\u8F93\u5165\u81EA\u5B9A\u4E49\u65F6\u95F4\u5417\uFF1F\u6B64\u64CD\u4F5C\u5C06\u8986\u76D6\u5F53\u524D\u65F6\u95F4\u3002')) return;
+            var input = document.getElementById('punchTimeInput');
+            timeIsLive = false;
+            input.readOnly = false;
+            input.style.background = '#fff';
+            input.style.borderColor = '#ef6c00';
+            input.focus();
+            input.select();
+        };
+
+        window.resetToLiveTime = function() {
+            timeIsLive = true;
+            var input = document.getElementById('punchTimeInput');
+            input.value = getNowTimeStr();
+            input.readOnly = true;
+            input.style.background = '#e3f2fd';
+            input.style.borderColor = 'var(--primary)';
+        };
+
+        function updateStatusTime() {
+            var now = new Date();
+            var h = String(now.getHours()).padStart(2,'0');
+            var m = String(now.getMinutes()).padStart(2,'0');
+            var timeStr = h+':'+m;
+            document.getElementById('statusTime').textContent = timeStr;
+            if (timeIsLive) {
+                var punchInput = document.getElementById('punchTimeInput');
+                if (punchInput) punchInput.value = timeStr;
+            }
+        }
+        function getTodayStr() {
+            const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+        }
+        function showToast(msg) {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div'); toast.className='toast'; toast.textContent=msg;
+            container.appendChild(toast);
+            setTimeout(()=>{ if(toast.parentNode) toast.remove(); }, 2200);
+        }
+        function updateLineDisplay() {
+            const cfg = loadConfig();
+            document.getElementById('headerLineName').textContent = cfg.lineBinding;
+            document.getElementById('currentLineBadge').textContent = cfg.lineBinding;
+            document.getElementById('lineBinding').value = cfg.lineBinding;
+            document.getElementById('teamDisplay').textContent = '\u73ED\u7EC4' + cfg.teamBinding;
+            document.getElementById('teamBinding').value = cfg.teamBinding || 'A';
+            var team = cfg.teamBinding || 'A';
+            var ranges = TEAM_TIME_RANGES[team] || [];
+            var rangeEl = document.getElementById('teamTimeRange');
+            var textEl = document.getElementById('teamTimeRangeText');
+            if (ranges.length > 0) {
+                textEl.textContent = ' ' + ranges.join(' / ');
+                rangeEl.style.display = 'block';
+            } else {
+                rangeEl.style.display = 'none';
+            }
+        }
+
+        // ---------- 打卡类型 & 时间模式 ----------
+        var TEAM_TIME_RANGES = {
+            A: ['06:00-11:00', '14:00-15:00'],
+            B: ['06:30-11:30', '14:30-15:30'],
+            C: ['07:00-12:00', '15:00-16:00']
+        };
+
+
+        function getEffectivePunchTime() {
+            var now = new Date();
+            var timeInput = document.getElementById('punchTimeInput');
+            if (timeInput && timeInput.value) {
+                var parts = timeInput.value.split(':');
+                now.setHours(parseInt(parts[0]), parseInt(parts[1]), 0, 0);
+            }
+            return now;
+        }
+
+        // 根据打卡时间自动判断班组名称
+        function getTeamByTime(d) {
+            var h = d.getHours();
+            if (h >= 6 && h < 14) return '\u65E9\u73ED';
+            if (h >= 14 && h < 22) return '\u4E2D\u73ED';
+            return '\u665A\u73ED';
+        }
+
+        // ---------- 登录 ----------
+        window.handleLogin = function() {
+            var cfg = loadConfig();
+            var user = document.getElementById('loginUser').value.trim();
+            var pass = document.getElementById('loginPass').value.trim();
+            if(!user || !pass) return showToast('请输入账号和密码');
+            if(user === cfg.deviceAccount && pass === cfg.devicePassword) {
+                isLoggedIn = true; currentUser = user;
+                localStorage.setItem('punchLoggedIn_v3','true'); localStorage.setItem('punchUser_v3', user);
+                showMainPage();
+            } else {
+                showToast('\u274C 账号或密码错误');
+                document.getElementById('loginPass').value='';
+            }
+        };
+        window.handleLogout = function() {
+            if(!confirm('\u786E\u5B9A\u9000\u51FA\u767B\u5F55\uFF1F')) return;
+            isLoggedIn = false; currentUser = '';
+            localStorage.removeItem('punchLoggedIn_v3'); localStorage.removeItem('punchUser_v3');
+            document.getElementById('loginPage').style.display='flex'; document.getElementById('loginPage').classList.add('active');
+            document.getElementById('mainPage').classList.remove('active'); document.getElementById('mainPage').style.display='none';
+            showToast('\u5DF2\u9000\u51FA');
+        };
+        function showMainPage() {
+            document.getElementById('loginPage').style.display='none'; document.getElementById('loginPage').classList.remove('active');
+            document.getElementById('mainPage').style.display='flex'; document.getElementById('mainPage').classList.add('active');
+            document.getElementById('headerUser').textContent = currentUser;
+            updateLineDisplay();
+            switchTab('punch');
+            refreshRecords();
+            updateConfigUI();
+            updateStatusTime();
+        }
+
+        // ---------- Tab切换 ----------
+        window.switchTab = function(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.nav-item').forEach(function(el){el.classList.remove('active');});
+            var navBtn = document.querySelector('.nav-item[data-tab="'+tab+'"]');
+            if (navBtn) navBtn.classList.add('active');
+            document.getElementById('tabPunch').style.display = tab==='punch'?'block':'none';
+            document.getElementById('tabRecords').style.display = tab==='records'?'block':'none';
+            document.getElementById('tabConfig').style.display = tab==='config'?'block':'none';
+            if(tab==='records') refreshRecords();
+            if(tab==='config') { updateConfigUI(); renderEmployeeStatusList(); renderEmployeeLineList(); }
+            if(tab==='punch') { updateLineDisplay(); updateStatusTime(); resetToLiveTime(); setTimeout(simulateFaceScan, 500); }
+        };
+
+        // ---------- 记录视图切换 ----------
+        window.switchRecordView = function(view) {
+            recordView = view;
+            document.getElementById('toggleSigned').classList.toggle('active', view==='signed');
+            document.getElementById('toggleUnsigned').classList.toggle('active', view==='unsigned');
+            refreshRecords();
+        };
+
+        // ---------- 人脸识别模拟 ----------
+        window.simulateFaceScan = function() {
+            if(scanning) return;
+            var cfg = loadConfig();
+            var employees = getEmployees();
+            if(employees.length===0) return showToast('\u65E0\u5458\u5DE5\u6570\u636E');
+            scanning = true;
+            var statusEl = document.getElementById('scanStatusText');
+            statusEl.textContent = '\uD83D\uDD0D \u6B63\u5728\u8BC6\u522B\u9762\u90E8...';
+            statusEl.className = 'scan-status-text';
+            document.getElementById('startScanBtn').disabled = true;
+
+            setTimeout(function() {
+                var randomIdx = Math.floor(Math.random() * employees.length);
+                var randomEmp = employees[randomIdx];
+                var team = cfg.teamBinding || 'A';
+                var teamName = '\u73ED\u7EC4' + team;
+                var punchTime = getEffectivePunchTime();
+
+                var isSpecial = randomEmp.status === 'leave' || randomEmp.status === 'rest';
+                var workHours = randomEmp.status==='leave' ? cfg.leaveHours :
+                                  randomEmp.status==='rest' ? cfg.restHours : 8;
+                var isEarly = false;
+
+                var allowPunch = true;
+                if(isSpecial && ((randomEmp.status==='leave' && !cfg.allowLeaveEarly) || (randomEmp.status==='rest' && !cfg.allowRestEarly))) {
+                    allowPunch = false;
+                }
+                if(!allowPunch) {
+                    statusEl.textContent = '\u26D4 \u5F53\u524D\u89C4\u5219\u4E0D\u5141\u8BB8\u8BE5\u5458\u5DE5\u63D0\u524D\u6253\u5361';
+                    statusEl.className = 'scan-status-text error';
+                    scanning = false;
+                    return;
+                }
+
+                statusEl.textContent = '\u2705 \u8BC6\u522B\u6210\u529F';
+                statusEl.className = 'scan-status-text success';
+
+                var timeStr = punchTime.getFullYear()+'-'+String(punchTime.getMonth()+1).padStart(2,'0')+'-'+String(punchTime.getDate()).padStart(2,'0')+' '+
+                    String(punchTime.getHours()).padStart(2,'0')+':'+String(punchTime.getMinutes()).padStart(2,'0')+':'+String(punchTime.getSeconds()).padStart(2,'0');
+
+                var records = loadRecords();
+
+                var existIdx = -1;
+                for (var i = 0; i < records.length; i++) {
+                    if (records[i].empId === randomEmp.id &&
+                        records[i].date === getTodayStr() &&
+                        records[i].teamName === teamName) {
+                        existIdx = i;
+                        break;
+                    }
+                }
+                if (existIdx !== -1) records.splice(existIdx, 1);
+
+                records.unshift({
+                    id: 'R'+Date.now()+'_'+randomEmp.id,
+                    empId: randomEmp.id,
+                    empName: randomEmp.name,
+                    dept: randomEmp.dept,
+                    date: getTodayStr(),
+                    time: timeStr,
+                    teamName: teamName,
+                    status: randomEmp.status,
+                    workHours: workHours,
+                    lineBinding: cfg.lineBinding,
+                    isEarly: isEarly,
+                    punchIndex: filtered.length + 1,
+                    punchLabel: '\u7B2C' + (filtered.length + 1) + '\u6B21'
+                });
+                saveRecords(records);
+
+                // 语音播报
+                speakText(randomEmp.name + ' 打卡成功');
+
+                // 显示弹窗
+                var modal = document.getElementById('faceResultModal');
+                var statusLabel = randomEmp.status==='leave'?'\u8BF7\u5047':randomEmp.status==='rest'?'\u653E\u4F11':'\u6B63\u5E38';
+                var badgeClass = randomEmp.status==='leave'?'badge-warning':randomEmp.status==='rest'?'badge-gray':'badge-success';
+                document.getElementById('faceResultAvatar').textContent = randomEmp.name.charAt(0);
+                document.getElementById('faceResultAvatar').style.background = randomEmp.avatarBg;
+                document.getElementById('faceResultName').textContent = randomEmp.name;
+                document.getElementById('faceResultDept').textContent = randomEmp.dept;
+                document.getElementById('faceResultBadge').innerHTML = '<span class="badge '+badgeClass+'">'+statusLabel+'</span>'+(isEarly?' <span class="badge badge-warning">\u23F0\u63D0\u524D</span>':'');
+                document.getElementById('faceResultTime').textContent = timeStr;
+                document.getElementById('faceResultHint').textContent = '\u5DE5\u65F6: '+workHours+'h | \u7B49\u5F85\u4E0B\u4E00\u4F4D...';
+                modal.style.display = 'flex';
+
+                setTimeout(function() {
+                    modal.style.display = 'none';
+                    statusEl.textContent = '\u51C6\u5907\u5C31\u7EEA';
+                    statusEl.className = 'scan-status-text';
+                    scanning = false;
+                    resetToLiveTime();
+                }, 2000);
+
+                if(currentTab==='records') refreshRecords();
+            }, 1500);
+        };
+
+        window.resetScan = function() {
+            document.getElementById('scanStatusText').textContent = '\u51C6\u5907\u5C31\u7EEA';
+            document.getElementById('scanStatusText').className = 'scan-status-text';
+            scanning = false;
+            resetToLiveTime();
+        };
+
+        // ---------- 人员调动 ----------
+        function checkAndShowTransferModal(emp, currentLine) {
+            if (emp.assignedLine !== currentLine) {
+                pendingTransferEmps = [emp];
+                document.getElementById('transferTargetLine').textContent = currentLine;
+                var listEl = document.getElementById('transferEmpList');
+                listEl.innerHTML = '<div class="emp-row">'+
+                    '<div style="width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff;background:'+emp.avatarBg+';flex-shrink:0;">'+emp.name.charAt(0)+'</div>'+
+                    '<div class="emp-info">'+
+                        '<div class="emp-name">'+emp.name+'</div>'+
+                        '<div class="emp-dept">'+emp.dept+'</div>'+
+                        '<div class="emp-line">\u539F\u7EBF\u4F53: '+emp.assignedLine+'</div>'+
+                    '</div>'+
+                '</div>';
+                document.getElementById('transferModal').classList.add('show');
+            }
+        }
+
+        window.closeTransferModal = function() {
+            document.getElementById('transferModal').classList.remove('show');
+            pendingTransferEmps = [];
+        };
+
+        window.confirmTransfer = function() {
+            var cfg = loadConfig();
+            for (var i = 0; i < pendingTransferEmps.length; i++) {
+                cfg.employeeLines[pendingTransferEmps[i].id] = cfg.lineBinding;
+            }
+            saveConfig(cfg);
+            document.getElementById('transferModal').classList.remove('show');
+            showToast('\u2705 '+pendingTransferEmps.length+'\u540D\u5458\u5DE5\u5DF2\u8C03\u52A8\u81F3'+cfg.lineBinding);
+            pendingTransferEmps = [];
+            renderEmployeeLineList();
+        };
+
+        // ---------- 员工线体管理 ----------
+        window.openEmpLineModal = function(empId) {
+            empLineEditTarget = empId;
+            var cfg = loadConfig();
+            var emp = null;
+            for (var i = 0; i < DEFAULT_EMPLOYEES.length; i++) {
+                if (DEFAULT_EMPLOYEES[i].id === empId) { emp = DEFAULT_EMPLOYEES[i]; break; }
+            }
+            var currentLine = cfg.employeeLines[empId] || cfg.lineBinding;
+            document.getElementById('empLineModalTitle').textContent = '\u3010'+emp.name+'\u3011\u7EBF\u4F53\u8BBE\u7F6E';
+            document.getElementById('empLineSelect').value = currentLine;
+            document.getElementById('empLineModal').classList.add('show');
+        };
+
+        window.closeEmpLineModal = function() {
+            document.getElementById('empLineModal').classList.remove('show');
+            empLineEditTarget = null;
+        };
+
+        window.confirmEmpLineChange = function() {
+            if (!empLineEditTarget) return;
+            var cfg = loadConfig();
+            cfg.employeeLines[empLineEditTarget] = document.getElementById('empLineSelect').value;
+            saveConfig(cfg);
+            closeEmpLineModal();
+            renderEmployeeLineList();
+            showToast('\u2605 \u7EBF\u4F53\u5DF2\u66F4\u65B0');
+        };
+
+        function renderEmployeeLineList() {
+            var container = document.getElementById('employeeLineList');
+            if (!container) return;
+            var cfg = loadConfig();
+            var html = '';
+            var employees = getEmployees();
+            for (var i = 0; i < employees.length; i++) {
+                var emp = employees[i];
+                var isCurrentLine = emp.assignedLine === cfg.lineBinding;
+                html += '<div class="employee-list-item">'+
+                    '<div class="emp-avatar" style="background:'+emp.avatarBg+'">'+emp.name.charAt(0)+'</div>'+
+                    '<div class="emp-info">'+
+                        '<div class="emp-name">'+emp.name+'</div>'+
+                        '<div class="emp-meta">'+emp.dept+'</div>'+
+                    '</div>'+
+                    '<span class="emp-line-tag '+(isCurrentLine ? 'emp-line-current' : 'emp-line-other')+'">'+emp.assignedLine+'</span>'+
+                    '<button class="btn btn-xs btn-outline" style="font-size:10px;padding:0 8px;height:26px;" onclick="openEmpLineModal(\''+emp.id+'\')">\u8BBE\u7F6E</button>'+
+                '</div>';
+            }
+            container.innerHTML = html;
+        }
+
+        // ---------- 记录查看 ----------
+        window.refreshRecords = function() {
+            var dateFilter = getTodayStr();
+            var allRecords = loadRecords();
+            var dateRecords = [];
+            for (var i = 0; i < allRecords.length; i++) {
+                if (allRecords[i].date === dateFilter) dateRecords.push(allRecords[i]);
+            }
+
+            var employees = getEmployees();
+            var specialEmps = 0;
+            for (var k = 0; k < employees.length; k++) {
+                if (employees[k].status !== 'normal') specialEmps++;
+            }
+
+            var maxPunch = 1;
+            for (var r = 0; r < dateRecords.length; r++) {
+                if (dateRecords[r].punchIndex > maxPunch) maxPunch = dateRecords[r].punchIndex;
+            }
+
+            var sel = document.getElementById('punchIndexSelect');
+            var currentVal = punchIndexFilter;
+            sel.innerHTML = '';
+            for (var pi = 1; pi <= maxPunch; pi++) {
+                var type = pi % 2 === 1 ? '\u4E0A\u73ED' : '\u4E0B\u73ED';
+                var idx = Math.ceil(pi / 2);
+                var label = idx + '\u6B21' + type;
+                sel.innerHTML += '<option value="' + pi + '">' + label + '</option>';
+            }
+            sel.value = (currentVal >= 1 && currentVal <= maxPunch) ? currentVal : 1;
+
+            var filtered = [];
+            for (var fi = 0; fi < dateRecords.length; fi++) {
+                if (dateRecords[fi].punchIndex === punchIndexFilter) {
+                    filtered.push(dateRecords[fi]);
+                }
+            }
+
+            var doneCount = filtered.length;
+            var missCount = Math.max(0, employees.length - doneCount - specialEmps);
+
+            document.getElementById('statDone').textContent = doneCount;
+            document.getElementById('statMiss').textContent = missCount;
+            document.getElementById('statSpecial').textContent = specialEmps;
+
+            var container = document.getElementById('recordsList');
+
+            if (recordView === 'signed') {
+                if (filtered.length === 0) {
+                    container.innerHTML = '<p style="color:#999;text-align:center;padding:30px;">\u6682\u65E0\u6253\u5361\u8BB0\u5F55</p>';
+                } else {
+                    var signedHtml = '';
+                    for (var m = 0; m < filtered.length; m++) {
+                        var rec = filtered[m];
+                        var emp2 = null;
+                        for (var n = 0; n < employees.length; n++) {
+                            if (employees[n].id === rec.empId) { emp2 = employees[n]; break; }
+                        }
+                        var bg = emp2 ? emp2.avatarBg : '#999';
+                        var statusText = rec.status==='leave'?'\u8BF7\u5047':rec.status==='rest'?'\u653E\u4F11':'\u6B63\u5E38';
+                        var badgeCls = rec.status==='leave'?'badge-warning':rec.status==='rest'?'badge-gray':'badge-success';
+                        signedHtml += '<div class="record-item">'+
+                            '<div class="record-avatar" style="background:'+bg+'">'+rec.empName.charAt(0)+'</div>'+
+                            '<div class="record-info">'+
+                                '<div class="record-name">'+rec.empName+' <span style="font-size:10px;color:#888;">'+rec.dept+'</span></div>'+
+                                '<div class="record-detail">\uD83D\uDD50 '+rec.time+' | '+rec.teamName+' | '+rec.workHours+'h '+(rec.isEarly?'\u23F0\u63D0\u524D':'')+'</div>'+
+                            '</div>'+
+                            '<span class="badge '+badgeCls+'">'+statusText+'</span>'+
+                        '</div>';
+                    }
+                    container.innerHTML = signedHtml;
+                }
+            } else {
+                var cfg = loadConfig();
+                var doneIds = {};
+                for (var di = 0; di < filtered.length; di++) doneIds[filtered[di].empId] = true;
+                var unsignedHtml = '';
+                for (var s = 0; s < employees.length; s++) {
+                    var emp3 = employees[s];
+                    if (emp3.status === 'normal' && !doneIds[emp3.id]) {
+                        var isCurrLine = emp3.assignedLine === cfg.lineBinding;
+                        unsignedHtml += '<div class="record-item">'+
+                            '<div class="record-avatar" style="background:'+emp3.avatarBg+'">'+emp3.name.charAt(0)+'</div>'+
+                            '<div class="record-info">'+
+                                '<div class="record-name">'+emp3.name+'</div>'+
+                                '<div class="record-detail">'+emp3.dept+'</div>'+
+                            '</div>'+
+                            '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">'+
+                                '<span class="badge badge-warning">\u672A\u7B7E\u5230</span>'+
+                                '<span style="font-size:11px;color:'+(isCurrLine?'#2e7d32':'#c62828')+';">'+emp3.assignedLine+'</span>'+
+                            '</div>'+
+                        '</div>';
+                    }
+                }
+                if (!unsignedHtml) {
+                    container.innerHTML = '<p style="color:#2e7d32;text-align:center;padding:30px;">\uD83C\uDF89 \u6240\u6709\u5458\u5DE5\u5DF2\u7B7E\u5230\uFF01</p>';
+                } else {
+                    container.innerHTML = unsignedHtml;
+                }
+            }
+        };
+
+        window.switchPunchIndex = function(idx) {
+            punchIndexFilter = parseInt(idx);
+            refreshRecords();
+        };
+
+        // ---------- 配置功能 ----------
+        function updateConfigUI() {
+            var cfg = loadConfig();
+            document.getElementById('lineBinding').value = cfg.lineBinding;
+            document.getElementById('allowLeaveEarly').checked = cfg.allowLeaveEarly!==false;
+            document.getElementById('allowRestEarly').checked = cfg.allowRestEarly!==false;
+            document.getElementById('leaveHours').value = cfg.leaveHours;
+            document.getElementById('restHours').value = cfg.restHours;
+            document.getElementById('earliestPunchTime').value = cfg.earliestPunchTime;
+            var fthEl = document.getElementById('baiduFaceThreshold');
+            if (fthEl) fthEl.value = cfg.baiduFaceThreshold;
+            var mthEl = document.getElementById('baiduMatchThreshold');
+            if (mthEl) mthEl.value = cfg.baiduMatchThreshold;
+            var disEl = document.getElementById('baiduRecognizeDistance');
+            if (disEl) disEl.value = cfg.baiduRecognizeDistance;
+            var livEl = document.getElementById('baiduLivenessCheck');
+            if (livEl) livEl.checked = cfg.baiduLivenessCheck!==false;
+            var mskEl = document.getElementById('baiduMaskDetect');
+            if (mskEl) mskEl.checked = cfg.baiduMaskDetect!==false;
+            var toutEl = document.getElementById('baiduTimeout');
+            if (toutEl) toutEl.value = cfg.baiduTimeout;
+            var vthEl = document.getElementById('val_threshold');
+            if (vthEl) vthEl.textContent = cfg.baiduFaceThreshold;
+            var vmtEl = document.getElementById('val_match');
+            if (vmtEl) vmtEl.textContent = cfg.baiduMatchThreshold;
+        }
+
+        window.updateBaiduParamDisplay = function(type, val) {
+            if (type === 'threshold') {
+                var el = document.getElementById('val_threshold');
+                if (el) el.textContent = val;
+            }
+            if (type === 'match') {
+                var el2 = document.getElementById('val_match');
+                if (el2) el2.textContent = val;
+            }
+        };
+
+        window.bindLine = function() {
+            var cfg = loadConfig();
+            cfg.lineBinding = document.getElementById('lineBinding').value;
+            cfg.teamBinding = document.getElementById('teamBinding').value;
+            saveConfig(cfg);
+            updateLineDisplay();
+            resetToLiveTime();
+            showToast('\u2705 \u7EBF\u4F53\u4E0E\u73ED\u7EC4\u5DF2\u7ED1\u5B9A');
+        };
+
+        window.saveSpecialConfig = function() {
+            var cfg = loadConfig();
+            cfg.allowLeaveEarly = document.getElementById('allowLeaveEarly').checked;
+            cfg.allowRestEarly = document.getElementById('allowRestEarly').checked;
+            cfg.leaveHours = parseInt(document.getElementById('leaveHours').value)||4;
+            cfg.restHours = parseInt(document.getElementById('restHours').value)||0;
+            cfg.earliestPunchTime = document.getElementById('earliestPunchTime').value;
+            saveConfig(cfg);
+            showToast('\u2705 \u89C4\u5219\u5DF2\u4FDD\u5B58');
+        };
+
+        window.saveBaiduParams = function() {
+            var cfg = loadConfig();
+            cfg.baiduFaceThreshold = parseInt(document.getElementById('baiduFaceThreshold').value) || 80;
+            cfg.baiduMatchThreshold = parseInt(document.getElementById('baiduMatchThreshold').value) || 72;
+            cfg.baiduRecognizeDistance = parseInt(document.getElementById('baiduRecognizeDistance').value) || 3;
+            cfg.baiduLivenessCheck = document.getElementById('baiduLivenessCheck').checked;
+            cfg.baiduMaskDetect = document.getElementById('baiduMaskDetect').checked;
+            cfg.baiduTimeout = parseInt(document.getElementById('baiduTimeout').value) || 5;
+            saveConfig(cfg);
+            showToast('\u2705 \u8BC6\u522B\u53C2\u6570\u5DF2\u4FDD\u5B58');
+        };
+
+        function renderEmployeeStatusList() {
+            var employees = getEmployees();
+            var cfg = loadConfig();
+            var container = document.getElementById('employeeStatusList');
+            var html = '';
+            for (var i = 0; i < employees.length; i++) {
+                var emp = employees[i];
+                var st = cfg.employeeStatus[emp.id] || 'normal';
+                html += '<div class="config-row" style="padding:6px 0;">'+
+                    '<span style="font-size:12px;width:60px;">'+emp.name+'</span>'+
+                    '<span style="font-size:10px;color:#888;width:50px;">'+emp.dept+'</span>'+
+                    '<select onchange="updateEmpStatus(\''+emp.id+'\', this.value)" style="width:80px;height:30px;border:1px solid #ddd;border-radius:6px;font-size:11px;">'+
+                        '<option value="normal" '+(st==='normal'?'selected':'')+'>\u6B63\u5E38</option>'+
+                        '<option value="leave" '+(st==='leave'?'selected':'')+'>\u8BF7\u5047</option>'+
+                        '<option value="rest" '+(st==='rest'?'selected':'')+'>\u653E\u4F11</option>'+
+                    '</select>'+
+                '</div>';
+            }
+            container.innerHTML = html;
+        }
+        window.updateEmpStatus = function(empId, newStatus) {
+            var cfg = loadConfig();
+            if(newStatus==='normal') delete cfg.employeeStatus[empId];
+            else cfg.employeeStatus[empId] = newStatus;
+            saveConfig(cfg);
+            renderEmployeeStatusList();
+            showToast('\u72B6\u6001\u5DF2\u66F4\u65B0');
+        };
+
+        // ---------- 初始化 ----------
+        window.onload = function() {
+            updateStatusTime();
+            setInterval(updateStatusTime, 1000);
+            if(localStorage.getItem('punchLoggedIn_v3')==='true') {
+                currentUser = localStorage.getItem('punchUser_v3')||'admin';
+                isLoggedIn = true;
+                showMainPage();
+            }
+            refreshRecords();
+            if(!localStorage.getItem('punchConfig_v3')) saveConfig(getDefaultConfig());
+            document.getElementById('loginPass').addEventListener('keyup', function(e) {
+                if (e.key === 'Enter') handleLogin();
+            });
+            document.getElementById('loginUser').addEventListener('keyup', function(e) {
+                if (e.key === 'Enter') document.getElementById('loginPass').focus();
+            });
+        };
+    })();
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+
+# ndk
+obj/
+
+# 行动端/设备测试生成的文件
+*.apk
+*.ap_
+*.aab
+
+doc.rar
+/app/build

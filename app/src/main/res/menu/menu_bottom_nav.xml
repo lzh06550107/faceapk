@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/nav_punch"
+        android:icon="@android:drawable/ic_menu_camera"
+        android:title="@string/nav_punch"/>
+    <item android:id="@+id/nav_records"
+        android:icon="@android:drawable/ic_menu_agenda"
+        android:title="@string/nav_records"/>
+    <item android:id="@+id/nav_config"
+        android:icon="@android:drawable/ic_menu_preferences"
+        android:title="@string/nav_config"/>
+</menu>

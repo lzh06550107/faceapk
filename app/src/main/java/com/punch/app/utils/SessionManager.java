@@ -1,0 +1,689 @@
+package com.punch.app.utils;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.util.Log;
+
+import androidx.security.crypto.EncryptedSharedPreferences;
+import androidx.security.crypto.MasterKey;
+
+import com.punch.app.activation.BaiduDeviceFingerprint;
+import com.punch.app.network.dto.DeviceDto;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.security.MessageDigest;
+import java.util.Locale;
+import java.util.UUID;
+import java.util.regex.Pattern;
+
+public class SessionManager {
+    private static final String TAG = "SessionManager";
+    private static final int DEVICE_ID_LENGTH = 16;
+    private static final Pattern MODERN_DEVICE_ID_PATTERN = Pattern.compile("^[0-9A-F]{16}$");
+
+    private static SessionManager instance;
+
+    private Context appContext;
+    private SharedPreferences prefs;
+    private SharedPreferences securePrefs;
+
+    private SessionManager() {
+    }
+
+    public static SessionManager get() {
+        if (instance == null) {
+            instance = new SessionManager();
+        }
+        return instance;
+    }
+
+    public void init(Context context) {
+        appContext = context.getApplicationContext();
+        prefs = context.getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE);
+        try {
+            MasterKey masterKey = new MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build();
+            securePrefs = EncryptedSharedPreferences.create(
+                    context,
+                    "punch_secure",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            );
+        } catch (Exception e) {
+            Log.e(TAG, "EncryptedPrefs init failed, fallback", e);
+            securePrefs = context.getSharedPreferences("punch_secure", Context.MODE_PRIVATE);
+        }
+    }
+
+    public void saveToken(String token, long expireAt) {
+        securePrefs.edit()
+                .putString(Constants.KEY_TOKEN, token)
+                .putLong(Constants.KEY_TOKEN_EXPIRE, expireAt)
+                .apply();
+    }
+
+    public String getToken() {
+        return securePrefs.getString(Constants.KEY_TOKEN, null);
+    }
+
+    public long getTokenExpireAt() {
+        return securePrefs.getLong(Constants.KEY_TOKEN_EXPIRE, 0);
+    }
+
+    public boolean isTokenValid() {
+        return getTokenExpireAt() > System.currentTimeMillis() / 1000L;
+    }
+
+    public boolean isTokenNearExpiry() {
+        long expireAt = getTokenExpireAt();
+        long now = System.currentTimeMillis() / 1000L;
+        return expireAt > now && (expireAt - now) < Constants.TOKEN_REFRESH_HOURS * 3600L;
+    }
+
+    public void clearToken() {
+        securePrefs.edit()
+                .remove(Constants.KEY_TOKEN)
+                .remove(Constants.KEY_TOKEN_EXPIRE)
+                .apply();
+    }
+
+    public void clearLoginState() {
+        clearToken();
+        prefs.edit()
+                .remove(Constants.KEY_ACCOUNT)
+                .remove(Constants.KEY_LAST_HEARTBEAT_TIME)
+                .remove(Constants.KEY_LAST_SERVER_TIME)
+                .apply();
+        securePrefs.edit()
+                .remove(Constants.KEY_ACCOUNT_PASSWORD)
+                .apply();
+    }
+
+    public String getOrCreateDeviceId() {
+        String id = prefs.getString(Constants.KEY_DEVICE_ID, null);
+        if (id == null || id.isEmpty()) {
+            id = resolveDeviceId();
+            prefs.edit().putString(Constants.KEY_DEVICE_ID, id).apply();
+        } else if (!isModernDeviceId(id)) {
+            id = rebuildDeviceId();
+        }
+        return id;
+    }
+
+    public String getDeviceId() {
+        return getOrCreateDeviceId();
+    }
+
+    public void saveDeviceId(String deviceId) {
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            return;
+        }
+        prefs.edit().putString(Constants.KEY_DEVICE_ID, deviceId.trim()).apply();
+    }
+
+    public String rebuildDeviceId() {
+        String id = resolveDeviceId();
+        prefs.edit()
+                .putString(Constants.KEY_DEVICE_ID, id)
+                .putBoolean(Constants.KEY_DEVICE_REGISTERED, false)
+                .putBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, false)
+                .apply();
+        clearToken();
+        return id;
+    }
+
+    public boolean isDeviceRegistered() {
+        return prefs.getBoolean(Constants.KEY_DEVICE_REGISTERED, false);
+    }
+
+    public void saveDeviceRegistered(boolean registered) {
+        prefs.edit().putBoolean(Constants.KEY_DEVICE_REGISTERED, registered).apply();
+    }
+
+    public boolean isDeviceConfigInitialized() {
+        return prefs.getBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, false);
+    }
+
+    public void saveDeviceConfigInitialized(boolean initialized) {
+        prefs.edit().putBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, initialized).apply();
+    }
+
+    public void saveCompanyId(int companyId) {
+        prefs.edit().putInt(Constants.KEY_COMPANY_ID, companyId > 0 ? companyId : Constants.DEFAULT_COMPANY_ID).apply();
+    }
+
+    public int getCompanyId() {
+        int companyId = prefs.getInt(Constants.KEY_COMPANY_ID, Constants.DEFAULT_COMPANY_ID);
+        return companyId > 0 ? companyId : Constants.DEFAULT_COMPANY_ID;
+    }
+
+    public void saveBaseUrl(String baseUrl) {
+        prefs.edit()
+                .putString(Constants.KEY_BASE_URL, normalizeBaseUrl(baseUrl))
+                .apply();
+    }
+
+    public String getBaseUrl() {
+        if (prefs == null) {
+            return Constants.DEFAULT_BASE_URL;
+        }
+        return normalizeBaseUrl(prefs.getString(Constants.KEY_BASE_URL, Constants.DEFAULT_BASE_URL));
+    }
+
+    public void saveKioskEnabled(boolean enabled) {
+        prefs.edit().putBoolean(Constants.KEY_KIOSK_ENABLED, enabled).apply();
+    }
+
+    public boolean isKioskEnabled() {
+        if (prefs == null) {
+            return true;
+        }
+        return prefs.getBoolean(Constants.KEY_KIOSK_ENABLED, true);
+    }
+
+    public void saveAdvancedSettingsPassword(String password) {
+        String safePassword = password == null ? "" : password.trim();
+        if (safePassword.isEmpty()) {
+            safePassword = Constants.ADVANCED_SETTINGS_PASSWORD;
+        }
+        securePrefs.edit()
+                .putString(Constants.KEY_ADVANCED_SETTINGS_PASSWORD, safePassword)
+                .apply();
+    }
+
+    public String getAdvancedSettingsPassword() {
+        if (securePrefs == null) {
+            return Constants.ADVANCED_SETTINGS_PASSWORD;
+        }
+        String password = securePrefs.getString(
+                Constants.KEY_ADVANCED_SETTINGS_PASSWORD,
+                Constants.ADVANCED_SETTINGS_PASSWORD
+        );
+        if (password == null || password.trim().isEmpty()) {
+            return Constants.ADVANCED_SETTINGS_PASSWORD;
+        }
+        return password.trim();
+    }
+
+    public void saveAccount(String account) {
+        prefs.edit().putString(Constants.KEY_ACCOUNT, account).apply();
+    }
+
+    public String getAccount() {
+        return prefs.getString(Constants.KEY_ACCOUNT, "");
+    }
+
+    public void savePassword(String password) {
+        securePrefs.edit()
+                .putString(Constants.KEY_ACCOUNT_PASSWORD, password == null ? "" : password)
+                .apply();
+    }
+
+    public String getPassword() {
+        return securePrefs.getString(Constants.KEY_ACCOUNT_PASSWORD, "");
+    }
+
+    public void saveLineBinding(String code, String name) {
+        prefs.edit()
+                .putString(Constants.KEY_LINE_CODE, code)
+                .putString(Constants.KEY_LINE_NAME, name)
+                .apply();
+    }
+
+    public String getLineCode() {
+        return prefs.getString(Constants.KEY_LINE_CODE, "");
+    }
+
+    public String getLineName() {
+        return prefs.getString(Constants.KEY_LINE_NAME, "");
+    }
+
+    public void saveLineBindingOptions(List<DeviceDto.LineOptionData> options) {
+        JSONArray array = new JSONArray();
+        if (options != null) {
+            for (DeviceDto.LineOptionData option : options) {
+                if (option == null) {
+                    continue;
+                }
+                JSONObject item = new JSONObject();
+                try {
+                    item.put("code", option.code == null ? "" : option.code);
+                    item.put("name", option.name == null ? "" : option.name);
+                    array.put(item);
+                } catch (JSONException e) {
+                    Log.w(TAG, "Failed to encode line option", e);
+                }
+            }
+        }
+        prefs.edit().putString(Constants.KEY_LINE_OPTIONS, array.toString()).apply();
+    }
+
+    public List<DeviceDto.LineOptionData> getLineBindingOptions() {
+        String json = prefs.getString(Constants.KEY_LINE_OPTIONS, "");
+        if (json == null || json.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            JSONArray array = new JSONArray(json);
+            List<DeviceDto.LineOptionData> options = new ArrayList<>(array.length());
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject item = array.optJSONObject(i);
+                if (item == null) {
+                    continue;
+                }
+                DeviceDto.LineOptionData option = new DeviceDto.LineOptionData();
+                option.code = item.optString("code", "").trim();
+                option.name = item.optString("name", "").trim();
+                if (!option.code.isEmpty() || !option.name.isEmpty()) {
+                    options.add(option);
+                }
+            }
+            return options;
+        } catch (JSONException e) {
+            Log.w(TAG, "Failed to parse line options", e);
+            return Collections.emptyList();
+        }
+    }
+
+    public void saveTeamBindingId(int teamBindingId) {
+        prefs.edit().putInt(Constants.KEY_TEAM_BINDING_ID, teamBindingId).apply();
+    }
+
+    public int getTeamBindingId() {
+        return prefs.getInt(Constants.KEY_TEAM_BINDING_ID, 0);
+    }
+
+    public void saveTeamBindingName(String teamBindingName) {
+        prefs.edit()
+                .putString(Constants.KEY_TEAM_BINDING_NAME, teamBindingName == null ? "" : teamBindingName)
+                .apply();
+    }
+
+    public String getTeamBindingName() {
+        return prefs.getString(Constants.KEY_TEAM_BINDING_NAME, "");
+    }
+
+    public void saveTeamBindingOptions(List<DeviceDto.TeamOptionData> options) {
+        JSONArray array = new JSONArray();
+        if (options != null) {
+            for (DeviceDto.TeamOptionData option : options) {
+                if (option == null) {
+                    continue;
+                }
+                JSONObject item = new JSONObject();
+                try {
+                    item.put("id", option.id);
+                    item.put("name", option.name == null ? "" : option.name);
+                    JSONArray timeRanges = new JSONArray();
+                    if (option.timeRanges != null) {
+                        for (String timeRange : option.timeRanges) {
+                            if (timeRange == null || timeRange.trim().isEmpty()) {
+                                continue;
+                            }
+                            timeRanges.put(timeRange.trim());
+                        }
+                    }
+                    item.put("time_ranges", timeRanges);
+                    array.put(item);
+                } catch (JSONException e) {
+                    Log.w(TAG, "Failed to encode team option", e);
+                }
+            }
+        }
+        prefs.edit().putString(Constants.KEY_TEAM_OPTIONS, array.toString()).apply();
+    }
+
+    public List<DeviceDto.TeamOptionData> getTeamBindingOptions() {
+        String json = prefs.getString(Constants.KEY_TEAM_OPTIONS, "");
+        if (json == null || json.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            JSONArray array = new JSONArray(json);
+            List<DeviceDto.TeamOptionData> options = new ArrayList<>(array.length());
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject item = array.optJSONObject(i);
+                if (item == null) {
+                    continue;
+                }
+                DeviceDto.TeamOptionData option = new DeviceDto.TeamOptionData();
+                option.id = item.optInt("id", 0);
+                option.name = item.optString("name", "").trim();
+                JSONArray timeRanges = item.optJSONArray("time_ranges");
+                if (timeRanges != null) {
+                    for (int j = 0; j < timeRanges.length(); j++) {
+                        String timeRange = timeRanges.optString(j, "").trim();
+                        if (!timeRange.isEmpty()) {
+                            option.timeRanges.add(timeRange);
+                        }
+                    }
+                }
+                if (option.id > 0 || !option.name.isEmpty()) {
+                    options.add(option);
+                }
+            }
+            return options;
+        } catch (JSONException e) {
+            Log.w(TAG, "Failed to parse team options", e);
+            return Collections.emptyList();
+        }
+    }
+
+    public void saveCurrentTeamTimeRanges(List<String> timeRanges) {
+        JSONArray array = new JSONArray();
+        if (timeRanges != null) {
+            for (String timeRange : timeRanges) {
+                if (timeRange == null) {
+                    continue;
+                }
+                String value = timeRange.trim();
+                if (!value.isEmpty()) {
+                    array.put(value);
+                }
+            }
+        }
+        prefs.edit()
+                .putString(Constants.KEY_TEAM_TIME_RANGES, array.toString())
+                .apply();
+    }
+
+    public List<String> getCurrentTeamTimeRanges() {
+        String json = prefs.getString(Constants.KEY_TEAM_TIME_RANGES, "");
+        if (json == null || json.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            JSONArray array = new JSONArray(json);
+            List<String> ranges = new ArrayList<>(array.length());
+            for (int i = 0; i < array.length(); i++) {
+                String value = array.optString(i, "").trim();
+                if (!value.isEmpty()) {
+                    ranges.add(value);
+                }
+            }
+            return ranges;
+        } catch (JSONException e) {
+            Log.w(TAG, "Failed to parse team time ranges", e);
+            return Collections.emptyList();
+        }
+    }
+
+    public void saveUpdateInfo(boolean needUpdate, String apkUrl, String currentVersion, String targetVersion, String versionName) {
+        prefs.edit()
+                .putBoolean(Constants.KEY_UPDATE_NEED, needUpdate)
+                .putString(Constants.KEY_UPDATE_APK_URL, apkUrl == null ? "" : apkUrl)
+                .putString(Constants.KEY_UPDATE_CURRENT_VERSION, currentVersion == null ? "" : currentVersion)
+                .putString(Constants.KEY_UPDATE_TARGET_VERSION, targetVersion == null ? "" : targetVersion)
+                .putString(Constants.KEY_UPDATE_VERSION_NAME, versionName == null ? "" : versionName)
+                .apply();
+    }
+
+    public boolean isUpdateNeeded() {
+        return prefs.getBoolean(Constants.KEY_UPDATE_NEED, false);
+    }
+
+    public String getUpdateTargetVersion() {
+        return prefs.getString(Constants.KEY_UPDATE_TARGET_VERSION, "");
+    }
+
+    public String getUpdateApkUrl() {
+        return prefs.getString(Constants.KEY_UPDATE_APK_URL, "");
+    }
+
+    public String getUpdateCurrentVersion() {
+        return prefs.getString(Constants.KEY_UPDATE_CURRENT_VERSION, "");
+    }
+
+    public String getUpdateVersionName() {
+        return prefs.getString(Constants.KEY_UPDATE_VERSION_NAME, "");
+    }
+
+    public void saveEmpDataVersion(int version) {
+        prefs.edit().putInt(Constants.KEY_EMP_DATA_VERSION, version).apply();
+    }
+
+    public int getEmpDataVersion() {
+        return prefs.getInt(Constants.KEY_EMP_DATA_VERSION, 0);
+    }
+
+    public float getMatchThreshold() {
+        return prefs.getFloat(Constants.KEY_MATCH_THRESHOLD, Constants.DEFAULT_MATCH_THRESHOLD);
+    }
+
+    public void saveMatchThreshold(float value) {
+        prefs.edit().putFloat(Constants.KEY_MATCH_THRESHOLD, value).apply();
+    }
+
+    public float getFaceThreshold() {
+        return prefs.getFloat(Constants.KEY_FACE_THRESHOLD, Constants.DEFAULT_FACE_THRESHOLD);
+    }
+
+    public void saveFaceThreshold(float value) {
+        prefs.edit().putFloat(Constants.KEY_FACE_THRESHOLD, value).apply();
+    }
+
+    public boolean isLivenessCheck() {
+        return prefs.getBoolean(Constants.KEY_LIVENESS_CHECK, false);
+    }
+
+    public void saveLivenessCheck(boolean value) {
+        prefs.edit().putBoolean(Constants.KEY_LIVENESS_CHECK, value).apply();
+    }
+
+    public float getLivenessThreshold() {
+        return prefs.getFloat(Constants.KEY_LIVENESS_THRESHOLD, Constants.DEFAULT_LIVENESS_THRESHOLD);
+    }
+
+    public void saveLivenessThreshold(float value) {
+        prefs.edit().putFloat(Constants.KEY_LIVENESS_THRESHOLD, value).apply();
+    }
+
+    public String getRecognitionDistanceMode() {
+        return prefs.getString(Constants.KEY_RECOGNITION_DISTANCE_MODE, Constants.DEFAULT_DISTANCE_MODE);
+    }
+
+    public void saveRecognitionDistanceMode(String mode) {
+        prefs.edit().putString(Constants.KEY_RECOGNITION_DISTANCE_MODE, mode).apply();
+    }
+
+    public int getMinFaceSizeForRecognitionDistance() {
+        String mode = getRecognitionDistanceMode();
+        if (Constants.DISTANCE_MODE_NEAR.equals(mode)) {
+            return 120;
+        }
+        if (Constants.DISTANCE_MODE_FAR.equals(mode)) {
+            return 50;
+        }
+        return Constants.DEFAULT_MIN_FACE_SIZE;
+    }
+
+    public boolean isMaskDetectEnabled() {
+        return prefs.getBoolean(Constants.KEY_MASK_DETECT, Constants.DEFAULT_MASK_DETECT);
+    }
+
+    public void saveMaskDetectEnabled(boolean enabled) {
+        prefs.edit().putBoolean(Constants.KEY_MASK_DETECT, enabled).apply();
+    }
+
+    public int getRecognitionTimeoutSeconds() {
+        return prefs.getInt(Constants.KEY_RECOGNITION_TIMEOUT_SECONDS, Constants.DEFAULT_RECOGNITION_TIMEOUT_SECONDS);
+    }
+
+    public void saveRecognitionTimeoutSeconds(int seconds) {
+        prefs.edit().putInt(Constants.KEY_RECOGNITION_TIMEOUT_SECONDS, seconds).apply();
+    }
+
+    public void saveActivationMode(String mode) {
+        prefs.edit().putString(Constants.KEY_ACTIVATION_MODE, mode).apply();
+    }
+
+    public String getActivationMode() {
+        return prefs.getString(Constants.KEY_ACTIVATION_MODE, "");
+    }
+
+    public void saveActivationCode(String activationCode) {
+        securePrefs.edit().putString(Constants.KEY_ACTIVATION_CODE, activationCode == null ? "" : activationCode).apply();
+    }
+
+    public String getActivationCode() {
+        return securePrefs.getString(Constants.KEY_ACTIVATION_CODE, "");
+    }
+
+    public void saveActivationStatus(String status) {
+        prefs.edit().putString(Constants.KEY_ACTIVATION_STATUS, status).apply();
+    }
+
+    public String getActivationStatus() {
+        return prefs.getString(Constants.KEY_ACTIVATION_STATUS, Constants.ACTIVATION_STATUS_PENDING);
+    }
+
+    public void saveLastActivationCode(int code) {
+        prefs.edit().putInt(Constants.KEY_LAST_ACTIVATION_CODE, code).apply();
+    }
+
+    public int getLastActivationCode() {
+        return prefs.getInt(Constants.KEY_LAST_ACTIVATION_CODE, Integer.MIN_VALUE);
+    }
+
+    public void saveLastActivationMessage(String message) {
+        prefs.edit().putString(Constants.KEY_LAST_ACTIVATION_MESSAGE, message).apply();
+    }
+
+    public String getLastActivationMessage() {
+        return prefs.getString(Constants.KEY_LAST_ACTIVATION_MESSAGE, "");
+    }
+
+    public void saveLastActivationTime(long timeSeconds) {
+        prefs.edit().putLong(Constants.KEY_LAST_ACTIVATION_TIME, timeSeconds).apply();
+    }
+
+    public long getLastActivationTime() {
+        return prefs.getLong(Constants.KEY_LAST_ACTIVATION_TIME, 0L);
+    }
+
+    public void saveLastHeartbeatTime(long timeSeconds) {
+        prefs.edit().putLong(Constants.KEY_LAST_HEARTBEAT_TIME, timeSeconds).apply();
+    }
+
+    public long getLastHeartbeatTime() {
+        return prefs.getLong(Constants.KEY_LAST_HEARTBEAT_TIME, 0L);
+    }
+
+    public void saveLastServerTime(long timeSeconds) {
+        prefs.edit().putLong(Constants.KEY_LAST_SERVER_TIME, timeSeconds).apply();
+    }
+
+    public long getLastServerTime() {
+        return prefs.getLong(Constants.KEY_LAST_SERVER_TIME, 0L);
+    }
+
+    public void clearActivationState() {
+        prefs.edit()
+                .remove(Constants.KEY_ACTIVATION_MODE)
+                .remove(Constants.KEY_ACTIVATION_STATUS)
+                .remove(Constants.KEY_LAST_ACTIVATION_CODE)
+                .remove(Constants.KEY_LAST_ACTIVATION_MESSAGE)
+                .remove(Constants.KEY_LAST_ACTIVATION_TIME)
+                .apply();
+        securePrefs.edit().remove(Constants.KEY_ACTIVATION_CODE).apply();
+    }
+
+    public int getCameraFacing(int fallbackFacing) {
+        return prefs.getInt(Constants.KEY_CAMERA_FACING, fallbackFacing);
+    }
+
+    public void saveCameraFacing(int cameraFacing) {
+        prefs.edit().putInt(Constants.KEY_CAMERA_FACING, cameraFacing).apply();
+    }
+
+    public boolean isSoundEnabled() {
+        return prefs.getBoolean(Constants.KEY_SOUND_ENABLED, true);
+    }
+
+    public void saveSoundEnabled(boolean enabled) {
+        prefs.edit().putBoolean(Constants.KEY_SOUND_ENABLED, enabled).apply();
+    }
+
+    public void clearAll() {
+        prefs.edit().clear().apply();
+        securePrefs.edit().clear().apply();
+    }
+
+    static String buildStableDeviceId(String seed) {
+        if (seed == null || seed.trim().isEmpty()) {
+            return "";
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(seed.trim().getBytes(StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                builder.append(String.format(Locale.US, "%02X", b));
+            }
+            return builder.substring(0, DEVICE_ID_LENGTH);
+        } catch (Exception e) {
+            Log.e(TAG, "buildStableDeviceId failed", e);
+            return "";
+        }
+    }
+
+    private static String buildRandomDeviceId() {
+        return UUID.randomUUID()
+                .toString()
+                .replace("-", "")
+                .substring(0, DEVICE_ID_LENGTH)
+                .toUpperCase(Locale.US);
+    }
+
+    private String resolveDeviceId() {
+        String id = "";
+        if (appContext != null) {
+            id = buildStableDeviceId(BaiduDeviceFingerprint.get(appContext));
+        }
+        return id.isEmpty() ? buildRandomDeviceId() : id;
+    }
+
+    static boolean isModernDeviceId(String deviceId) {
+        return deviceId != null && MODERN_DEVICE_ID_PATTERN.matcher(deviceId.trim()).matches();
+    }
+
+    public static String normalizeBaseUrl(String baseUrl) {
+        if (baseUrl == null) {
+            return Constants.DEFAULT_BASE_URL;
+        }
+        String normalized = baseUrl.trim();
+        if (normalized.isEmpty()) {
+            return Constants.DEFAULT_BASE_URL;
+        }
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1).trim();
+        }
+        if (normalized.isEmpty()) {
+            return Constants.DEFAULT_BASE_URL;
+        }
+        try {
+            URI uri = new URI(normalized);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (host == null || host.trim().isEmpty()) {
+                return Constants.DEFAULT_BASE_URL;
+            }
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                return Constants.DEFAULT_BASE_URL;
+            }
+            return normalized;
+        } catch (Exception ignored) {
+            return Constants.DEFAULT_BASE_URL;
+        }
+    }
+}
