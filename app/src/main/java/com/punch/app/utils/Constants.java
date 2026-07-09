@@ -22,6 +22,7 @@ public class Constants {
     public static final String KEY_TEAM_BINDING_NAME = "team_binding_name";
     public static final String KEY_TEAM_OPTIONS = "team_options";
     public static final String KEY_TEAM_TIME_RANGES = "team_time_ranges";
+    public static final String KEY_CHECK_COUNT = "check_count";
     public static final String KEY_UPDATE_NEED = "update_need";
     public static final String KEY_UPDATE_APK_URL = "update_apk_url";
     public static final String KEY_UPDATE_CURRENT_VERSION = "update_current_version";
@@ -85,5 +86,5 @@ public class Constants {
     public static final String ACTIVATION_STATUS_DISABLED = "disabled";
 
     public static final String DB_NAME = "punch.db";
-    public static final int DB_VERSION = 6;
+    public static final int DB_VERSION = 8;
 }

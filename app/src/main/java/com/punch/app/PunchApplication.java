@@ -8,6 +8,7 @@ import android.util.Log;
 import com.punch.app.activation.ActivationManager;
 import com.punch.app.db.DatabaseHelper;
 import com.punch.app.face.FaceManager;
+import com.punch.app.network.InteractionLogStore;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncCoordinator;
 import com.punch.app.utils.AppLogger;
@@ -56,6 +57,7 @@ public class PunchApplication extends Application {
         instance = this;
 
         SessionManager.get().init(this);
+        InteractionLogStore.init(this);
         DatabaseHelper.get(this);
         ActivationManager.get().ensureDeviceRegistered(this);
 

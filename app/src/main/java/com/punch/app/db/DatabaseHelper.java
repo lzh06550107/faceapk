@@ -10,6 +10,7 @@ import com.punch.app.model.Employee;
 import com.punch.app.model.PunchRecord;
 import com.punch.app.model.SyncQueueItem;
 import com.punch.app.utils.Constants;
+import com.punch.app.utils.PunchSnapshotHelper;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,6 +21,7 @@ import java.util.Map;
 public class DatabaseHelper extends SQLiteOpenHelper {
 
     private static DatabaseHelper instance;
+    private final Context appContext;
 
     
     public static synchronized DatabaseHelper get(Context ctx) {
@@ -30,6 +32,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     
     private DatabaseHelper(Context context) {
         super(context, Constants.DB_NAME, null, Constants.DB_VERSION);
+        this.appContext = context.getApplicationContext();
     }
 
     
@@ -46,12 +49,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 "is_deleted INTEGER DEFAULT 0, updated_at INTEGER DEFAULT 0)");
 
         // 打卡记录表：保存本地打卡业务数据，以及是否已同步到服务端的状态。
-        db.execSQL("CREATE TABLE IF NOT EXISTS punch_records (" +
-                "id TEXT PRIMARY KEY, client_record_id TEXT NOT NULL UNIQUE, " +
-                "emp_id TEXT NOT NULL, emp_name TEXT NOT NULL, dept TEXT, " +
-                "punch_time INTEGER NOT NULL, punch_date TEXT NOT NULL, " +
-                "punch_type TEXT NOT NULL, shift_name TEXT, line_code TEXT NOT NULL, " +
-                "is_synced INTEGER DEFAULT 0)");
+        createPunchRecordsTable(db);
 
         // 同步队列表：只记录“待同步动作”和关联记录 ID，真正业务数据仍在各自业务表中。
         // UNIQUE(action, record_id) 防止同一条记录被重复加入相同同步任务。
@@ -63,8 +61,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
         // 常用索引：优化按线体、打卡日期、同步状态等场景的查询性能。
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_emp_line ON employees(assigned_line_code)");
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_date ON punch_records(punch_date)");
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_sync ON punch_records(is_synced)");
+        createPunchRecordIndexes(db);
     }
 
     
@@ -83,6 +80,12 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         }
         if (oldVersion < 6) {
             migratePunchRecordsSlimColumns(db);
+        }
+        if (oldVersion < 7) {
+            migratePunchRecordsAddTeamBindingAndClockIndex(db);
+        }
+        if (oldVersion >= 7 && oldVersion < 8) {
+            migratePunchRecordsAddSnapshotColumns(db);
         }
     }
 
@@ -134,6 +137,21 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     
     public List<Employee> getAllActiveEmployees() {
         return queryEmployees("is_deleted=0 AND face_status='enabled'", null);
+    }
+
+    public List<Employee> getAllEmployeesForDebug() {
+        List<Employee> list = new ArrayList<>();
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM employees ORDER BY updated_at DESC, id ASC",
+                null);
+        try {
+            while (c.moveToNext()) {
+                list.add(mapEmployee(c));
+            }
+        } finally {
+            c.close();
+        }
+        return list;
     }
 
     public int getActiveEmployeeCount() {
@@ -218,6 +236,17 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         getWritableDatabase().update("employees", v, "id=?", new String[]{id});
     }
 
+    public void removeEmployee(String id) {
+        if (id == null || id.trim().isEmpty()) {
+            return;
+        }
+        getWritableDatabase().delete("employees", "id=?", new String[]{id});
+    }
+
+    public void clearAllEmployees() {
+        getWritableDatabase().delete("employees", null, null);
+    }
+
     
     private List<Employee> queryEmployees(String where, String[] args) {
         List<Employee> list = new ArrayList<>();
@@ -257,6 +286,14 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         v.put("punch_time", r.punchTime); v.put("punch_date", r.punchDate);
         v.put("punch_type", r.punchType);
         v.put("shift_name", r.shiftName); v.put("line_code", r.lineCode);
+        v.put("team_binding_id", r.teamBindingId); v.put("clock_index", r.clockIndex);
+        v.put("match_score", r.matchScore);
+        v.put("snap_image_path", r.snapImagePath);
+        v.put("snap_image_mime_type", r.snapImageMimeType);
+        v.put("snap_image_width", r.snapImageWidth);
+        v.put("snap_image_height", r.snapImageHeight);
+        v.put("snap_image_size", r.snapImageSize);
+        v.put("snap_captured_at", r.snapCapturedAt);
         v.put("is_synced", r.isSynced);
         long result = getWritableDatabase().insertWithOnConflict("punch_records", null, v,
                 SQLiteDatabase.CONFLICT_IGNORE);
@@ -304,6 +341,15 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         r.punchType = c.getString(c.getColumnIndexOrThrow("punch_type"));
         r.shiftName = c.getString(c.getColumnIndexOrThrow("shift_name"));
         r.lineCode = c.getString(c.getColumnIndexOrThrow("line_code"));
+        r.teamBindingId = c.getInt(c.getColumnIndexOrThrow("team_binding_id"));
+        r.clockIndex = c.getInt(c.getColumnIndexOrThrow("clock_index"));
+        r.matchScore = c.getDouble(c.getColumnIndexOrThrow("match_score"));
+        r.snapImagePath = c.getString(c.getColumnIndexOrThrow("snap_image_path"));
+        r.snapImageMimeType = c.getString(c.getColumnIndexOrThrow("snap_image_mime_type"));
+        r.snapImageWidth = c.getInt(c.getColumnIndexOrThrow("snap_image_width"));
+        r.snapImageHeight = c.getInt(c.getColumnIndexOrThrow("snap_image_height"));
+        r.snapImageSize = c.getLong(c.getColumnIndexOrThrow("snap_image_size"));
+        r.snapCapturedAt = c.getLong(c.getColumnIndexOrThrow("snap_captured_at"));
         r.isSynced = c.getInt(c.getColumnIndexOrThrow("is_synced"));
         return r;
     }
@@ -359,14 +405,37 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     }
 
     
-    public List<String> getSignedEmpIds(String date, String lineCode) {
+    public List<String> getSignedEmpIds(String date, String lineCode, int teamBindingId, int clockIndex) {
         List<String> ids = new ArrayList<>();
         Cursor c = getReadableDatabase().rawQuery(
-                "SELECT DISTINCT emp_id FROM punch_records WHERE punch_date=? AND line_code=?",
-                new String[]{date, lineCode});
+                "SELECT DISTINCT emp_id FROM punch_records " +
+                        "WHERE punch_date=? AND line_code=? AND team_binding_id=? AND clock_index=?",
+                new String[]{date, lineCode, String.valueOf(teamBindingId), String.valueOf(clockIndex)});
         try { while (c.moveToNext()) ids.add(c.getString(0)); }
         finally { c.close(); }
         return ids;
+    }
+
+    private void createPunchRecordsTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS punch_records (" +
+                "id TEXT PRIMARY KEY, client_record_id TEXT NOT NULL UNIQUE, " +
+                "emp_id TEXT NOT NULL, emp_name TEXT NOT NULL, dept TEXT, " +
+                "punch_time INTEGER NOT NULL, punch_date TEXT NOT NULL, " +
+                "punch_type TEXT NOT NULL, shift_name TEXT, line_code TEXT NOT NULL, " +
+                "team_binding_id INTEGER NOT NULL DEFAULT 0, " +
+                "clock_index INTEGER NOT NULL DEFAULT 0, " +
+                "match_score REAL DEFAULT 0, " +
+                "snap_image_path TEXT, snap_image_mime_type TEXT DEFAULT 'image/jpeg', " +
+                "snap_image_width INTEGER DEFAULT 0, snap_image_height INTEGER DEFAULT 0, " +
+                "snap_image_size INTEGER DEFAULT 0, snap_captured_at INTEGER DEFAULT 0, " +
+                "is_synced INTEGER DEFAULT 0)");
+    }
+
+    private void createPunchRecordIndexes(SQLiteDatabase db) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_date ON punch_records(punch_date)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_sync ON punch_records(is_synced)");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_limit " +
+                "ON punch_records(punch_date, line_code, team_binding_id, clock_index, emp_id)");
     }
 
     
@@ -381,6 +450,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         } finally {
             db.endTransaction();
         }
+        PunchSnapshotHelper.clearSnapshots(appContext);
     }
 
     private void migrateEmployeesDropAvatarUrl(SQLiteDatabase db) {
@@ -454,12 +524,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
     private void migratePunchRecordsSlimColumns(SQLiteDatabase db) {
         db.execSQL("ALTER TABLE punch_records RENAME TO punch_records_legacy_v5");
-        db.execSQL("CREATE TABLE IF NOT EXISTS punch_records (" +
-                "id TEXT PRIMARY KEY, client_record_id TEXT NOT NULL UNIQUE, " +
-                "emp_id TEXT NOT NULL, emp_name TEXT NOT NULL, dept TEXT, " +
-                "punch_time INTEGER NOT NULL, punch_date TEXT NOT NULL, " +
-                "punch_type TEXT NOT NULL, shift_name TEXT, line_code TEXT NOT NULL, " +
-                "is_synced INTEGER DEFAULT 0)");
+        createPunchRecordsTable(db);
         db.execSQL("INSERT INTO punch_records (" +
                 "id, client_record_id, emp_id, emp_name, dept, punch_time, punch_date, " +
                 "punch_type, shift_name, line_code, is_synced) " +
@@ -467,7 +532,26 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 "punch_type, shift_name, line_code, is_synced " +
                 "FROM punch_records_legacy_v5");
         db.execSQL("DROP TABLE punch_records_legacy_v5");
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_date ON punch_records(punch_date)");
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_punch_sync ON punch_records(is_synced)");
+        createPunchRecordIndexes(db);
+    }
+
+    private void migratePunchRecordsAddTeamBindingAndClockIndex(SQLiteDatabase db) {
+        db.delete("sync_queue", null, null);
+        db.execSQL("DROP INDEX IF EXISTS idx_punch_date");
+        db.execSQL("DROP INDEX IF EXISTS idx_punch_sync");
+        db.execSQL("DROP INDEX IF EXISTS idx_punch_limit");
+        db.execSQL("DROP TABLE IF EXISTS punch_records");
+        createPunchRecordsTable(db);
+        createPunchRecordIndexes(db);
+    }
+
+    private void migratePunchRecordsAddSnapshotColumns(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE punch_records ADD COLUMN match_score REAL DEFAULT 0");
+        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_path TEXT");
+        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_mime_type TEXT DEFAULT 'image/jpeg'");
+        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_width INTEGER DEFAULT 0");
+        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_height INTEGER DEFAULT 0");
+        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_size INTEGER DEFAULT 0");
+        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_captured_at INTEGER DEFAULT 0");
     }
 }

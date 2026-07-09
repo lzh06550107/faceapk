@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:background="@color/primary"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="12dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_back_logs"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:text="返回"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            app:backgroundTint="@android:color/transparent"
+            app:strokeColor="@color/white"
+            app:strokeWidth="1dp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:text="交互日志"
+            android:textColor="@color/white"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_copy_logs"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="8dp"
+            android:minWidth="0dp"
+            android:text="复制"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            app:backgroundTint="@android:color/transparent"
+            app:strokeColor="@color/white"
+            app:strokeWidth="1dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_clear_logs"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:text="清空"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            app:backgroundTint="@android:color/transparent"
+            app:strokeColor="@color/white"
+            app:strokeWidth="1dp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/white"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="10dp"
+        android:text="先看摘要，再点开看详情。最新日志在最上方，适合按“心跳 -> 员工同步 -> 结果回传”的顺序排查。"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/tv_log_summary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/white"
+        android:paddingStart="14dp"
+        android:paddingTop="0dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="10dp"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/white"
+        android:scrollbars="none">
+
+        <RadioGroup
+            android:id="@+id/rg_log_filters"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingTop="0dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="12dp">
+
+            <RadioButton
+                android:id="@+id/rb_filter_all"
+                style="@style/LogFilterChip"
+                android:checked="true"
+                android:text="全部" />
+
+            <RadioButton
+                android:id="@+id/rb_filter_failed"
+                style="@style/LogFilterChip"
+                android:text="仅失败" />
+
+            <RadioButton
+                android:id="@+id/rb_filter_heartbeat"
+                style="@style/LogFilterChip"
+                android:text="心跳" />
+
+            <RadioButton
+                android:id="@+id/rb_filter_employee_sync"
+                style="@style/LogFilterChip"
+                android:text="员工同步" />
+
+            <RadioButton
+                android:id="@+id/rb_filter_event_result"
+                style="@style/LogFilterChip"
+                android:text="结果回传" />
+
+            <RadioButton
+                android:id="@+id/rb_filter_business"
+                style="@style/LogFilterChip"
+                android:text="业务事件" />
+        </RadioGroup>
+    </HorizontalScrollView>
+
+    <TextView
+        android:id="@+id/tv_empty_logs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="24dp"
+        android:background="@color/white"
+        android:gravity="center"
+        android:padding="24dp"
+        android:text="暂无交互日志"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv_logs"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:padding="12dp" />
+</LinearLayout>

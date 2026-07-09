@@ -30,7 +30,6 @@ public class PunchApiTest extends ApiTestSupport {
     @Test
     public void pushPunch_shouldSendNewPayloadWhenTeamBindingPresent() throws Exception {
         SessionManager.get().saveToken("token-abc", 1893456000L);
-        SessionManager.get().saveTeamBindingId(2);
         interceptor.enqueueJson(200, successEnvelope(
                 "{" +
                         "\"record_id\":12345," +
@@ -46,6 +45,7 @@ public class PunchApiTest extends ApiTestSupport {
         punch.empId = "pnFNxH";
         punch.lineCode = "PKZ450";
         punch.punchTime = 1782424800L;
+        punch.teamBindingId = 2;
 
         ApiResult<PunchDto.PunchPushData> result = ApiService.pushPunch(punch);
 

@@ -12,6 +12,12 @@ import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.speech.tts.TextToSpeech;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.AbsoluteSizeSpan;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.StyleSpan;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
@@ -23,6 +29,8 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.Switch;
@@ -43,15 +51,19 @@ import com.punch.app.model.Employee;
 import com.punch.app.model.PunchRecord;
 import com.punch.app.model.SyncQueueItem;
 import com.punch.app.network.ApiResult;
+import com.punch.app.network.InteractionLogger;
 import com.punch.app.network.ApiService;
 import com.punch.app.network.dto.PunchDto;
 import com.punch.app.service.SyncService;
+import com.punch.app.utils.AvatarLoader;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
+import com.punch.app.utils.PunchSnapshotHelper;
 import com.punch.app.utils.PunchTimeResolver;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.UlidGenerator;
 
+import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -79,7 +91,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private View layoutCameraLoading;
     private View layoutPunchStatusPanel;
     private TextureView textureView;
-    private TextView tvLine, tvTeam, tvStatus, tvResult, tvResultIcon, btnSwitchCamera, btnSound, btnPunchToggle, btnFullscreen, tvCameraLoading;
+    private TextView tvLine, tvTeam, tvStatus, tvResult, btnSwitchCamera, btnSound, btnPunchToggle, btnFullscreen, tvCameraLoading;
+    private TextView tvResultAvatarFallback;
+    private TextView tvResultAvatarTag;
     private TextView tvPunchStatusLevel;
     private TextView tvPunchStatusCurrent;
     private TextView tvPunchStatusToggle;
@@ -87,7 +101,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private Spinner spinnerShift;
     private Switch switchSpecialTime;
     private LinearLayout layoutResult;
+    private FrameLayout layoutResultAvatar;
     private LinearLayout layoutPunchStatusHistory;
+    private ImageView ivResultAvatar;
 
     // Camera
     private Camera camera;
@@ -108,13 +124,19 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private boolean recognizing = false;
     private long recognitionAttemptStartedAt = 0;
     private long lastRecognitionTimeoutAt = 0;
+    private long lastLivenessDebugLogAt = 0;
     private long lastFrameTime = 0;
     private static final long FRAME_INTERVAL_MS = 600;
     private static final long RESULT_DISPLAY_MS = 3000;
     private static final long RECOGNITION_TIMEOUT_FEEDBACK_COOLDOWN_MS = 1500;
+    private static final long LIVENESS_DEBUG_LOG_COOLDOWN_MS = 1500;
+    private static final int STABLE_MATCH_REQUIRED_FRAMES = 2;
+    private static final long STABLE_MATCH_MAX_GAP_MS = 1500;
     private static final long CAMERA_RELEASE_DELAY_MS = 1800;
     private static final long STATUS_PANEL_AUTO_HIDE_DELAY_MS = 3500;
     private static final long STATUS_PANEL_FADE_DURATION_MS = 500;
+    private static final float TTS_SPEECH_RATE_DEFAULT = 1.0f;
+    private static final float TTS_SPEECH_RATE_CHINESE = 0.88f;
     private static final int FREE_PUNCH_OPTION_VALUE = 0;
     private static final String FREE_PUNCH_OPTION_LABEL = "\u81ea\u7531\u6253\u5361";
     private static final String PUNCH_TYPE_FREE = "free";
@@ -123,6 +145,12 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final Runnable delayedCameraRelease = this::releaseCameraNow;
     private MediaPlayer feedbackPlayer;
+    private TextToSpeech textToSpeech;
+    private boolean ttsReady = false;
+    private boolean ttsInitializing = false;
+    private Locale ttsActiveLocale = Locale.getDefault();
+    private String pendingSpeechText;
+    private int pendingSpeechFallbackResId = 0;
     private boolean punchActive = false;
     private boolean waitingFirstPreviewFrame = false;
     private boolean statusHistoryExpanded = false;
@@ -131,6 +159,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private final Runnable hideStatusPanelRunnable = this::fadeOutStatusPanel;
 
     private volatile boolean frameProcessing = false;
+    private String pendingMatchEmpId;
+    private int pendingMatchCount = 0;
+    private long pendingMatchLastAt = 0L;
 
     @Nullable
     @Override
@@ -155,7 +186,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         tvTeam = view.findViewById(R.id.tv_team);
         tvStatus = view.findViewById(R.id.tv_status);
         tvResult = view.findViewById(R.id.tv_result);
-        tvResultIcon = view.findViewById(R.id.tv_result_icon);
+        ivResultAvatar = view.findViewById(R.id.iv_result_avatar);
+        tvResultAvatarFallback = view.findViewById(R.id.tv_result_avatar_fallback);
+        tvResultAvatarTag = view.findViewById(R.id.tv_result_avatar_tag);
         btnSwitchCamera = view.findViewById(R.id.btn_switch_camera);
         btnSound = view.findViewById(R.id.btn_sound);
         btnPunchToggle = view.findViewById(R.id.btn_punch_toggle);
@@ -168,6 +201,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         spinnerShift = view.findViewById(R.id.spinner_shift);
         switchSpecialTime = view.findViewById(R.id.switch_special_time);
         layoutResult = view.findViewById(R.id.layout_result);
+        layoutResultAvatar = view.findViewById(R.id.layout_result_avatar);
         layoutPunchStatusHistory = view.findViewById(R.id.layout_punch_status_history);
         cameraFacing = resolveInitialCameraFacing();
         soundEnabled = SessionManager.get().isSoundEnabled();
@@ -276,10 +310,11 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 : Camera.CameraInfo.CAMERA_FACING_FRONT;
         int targetCameraId = findCameraId(targetFacing);
         if (targetCameraId < 0) {
-            setStatus(targetFacing == Camera.CameraInfo.CAMERA_FACING_FRONT
+            String failureMessage = targetFacing == Camera.CameraInfo.CAMERA_FACING_FRONT
                     ? "\u8bbe\u5907\u4e0d\u652f\u6301\u524d\u7f6e\u76f8\u673a"
-                    : "\u8bbe\u5907\u4e0d\u652f\u6301\u540e\u7f6e\u76f8\u673a");
-            playFailFeedback();
+                    : "\u8bbe\u5907\u4e0d\u652f\u6301\u540e\u7f6e\u76f8\u673a";
+            setStatus(failureMessage);
+            playFailFeedback(buildGenericFailureSpeech(failureMessage));
             return;
         }
 
@@ -320,6 +355,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         if (!enabled) {
             recognizing = false;
             resetRecognitionAttempt();
+            resetPendingMatch();
             if (layoutResult != null) {
                 layoutResult.setVisibility(View.GONE);
             }
@@ -439,35 +475,54 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     
     private void initAudioFeedback() {
-        releaseAudioFeedback();
+        releaseMediaFeedback();
+        initTextToSpeech();
     }
 
     
     private void playPunchFeedback(PunchRecord record) {
-        if (!soundEnabled || !isAdded()) {
-            return;
-        }
-        playRawSound(R.raw.punch_success);
+        playResultFeedback(
+                buildPunchSuccessSpeech(record),
+                R.raw.punch_success
+        );
     }
 
     
     private void playFailFeedback() {
-        if (!soundEnabled || !isAdded()) {
-            return;
-        }
-        playRawSound(R.raw.punch_fail);
+        playResultFeedback(null, R.raw.punch_fail);
+    }
+
+    private void playFailFeedback(@Nullable String spokenText) {
+        playResultFeedback(spokenText, R.raw.punch_fail);
     }
 
     /** Plays fixed feedback for forbidden punch scenarios. */
     private void playForbiddenFeedback() {
+        playResultFeedback(null, R.raw.punch_forbidden);
+    }
+
+    private void playForbiddenFeedback(@Nullable String spokenText) {
+        playResultFeedback(spokenText, R.raw.punch_forbidden);
+    }
+
+    private void playResultFeedback(@Nullable String spokenText, int fallbackResId) {
         if (!soundEnabled || !isAdded()) {
             return;
         }
-        playRawSound(R.raw.punch_forbidden);
+        String normalizedText = normalizeSpeechText(spokenText);
+        if (!normalizedText.isEmpty() && speakTextFeedback(normalizedText)) {
+            return;
+        }
+        if (!normalizedText.isEmpty() && ttsInitializing) {
+            pendingSpeechText = normalizedText;
+            pendingSpeechFallbackResId = fallbackResId;
+            return;
+        }
+        playRawSound(fallbackResId);
     }
 
     private void playRawSound(int resId) {
-        releaseAudioFeedback();
+        releaseMediaFeedback();
         feedbackPlayer = MediaPlayer.create(requireContext().getApplicationContext(), resId);
         if (feedbackPlayer == null) {
             return;
@@ -488,7 +543,121 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         feedbackPlayer.start();
     }
 
-    private void releaseAudioFeedback() {
+    private void initTextToSpeech() {
+        if (!soundEnabled || !isAdded() || ttsReady || ttsInitializing) {
+            return;
+        }
+        if (textToSpeech != null) {
+            releaseTextToSpeech();
+        }
+        ttsInitializing = true;
+        textToSpeech = new TextToSpeech(requireContext().getApplicationContext(), status -> {
+            ttsInitializing = false;
+            if (status != TextToSpeech.SUCCESS || textToSpeech == null) {
+                flushPendingSpeechFallback();
+                releaseTextToSpeech();
+                return;
+            }
+            int languageStatus = textToSpeech.setLanguage(Locale.CHINA);
+            if (languageStatus == TextToSpeech.LANG_MISSING_DATA
+                    || languageStatus == TextToSpeech.LANG_NOT_SUPPORTED) {
+                ttsActiveLocale = Locale.getDefault();
+                textToSpeech.setLanguage(ttsActiveLocale);
+            } else {
+                ttsActiveLocale = Locale.CHINA;
+            }
+            applyTextToSpeechRate();
+            ttsReady = true;
+            if (pendingSpeechText != null && !pendingSpeechText.trim().isEmpty()) {
+                String text = pendingSpeechText;
+                pendingSpeechText = null;
+                pendingSpeechFallbackResId = 0;
+                speakTextFeedback(text);
+            }
+        });
+    }
+
+    private boolean speakTextFeedback(@Nullable String text) {
+        String normalizedText = normalizeSpeechText(text);
+        if (normalizedText.isEmpty() || !soundEnabled || !isAdded()) {
+            return false;
+        }
+        if (!ttsReady || textToSpeech == null) {
+            initTextToSpeech();
+            return false;
+        }
+        applyTextToSpeechRate();
+        textToSpeech.stop();
+        int result = textToSpeech.speak(
+                normalizedText,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "punch_feedback_" + System.currentTimeMillis()
+        );
+        return result == TextToSpeech.SUCCESS;
+    }
+
+    private String normalizeSpeechText(@Nullable String text) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replace('\n', '\uFF0C').replace('\r', '\u3000').trim();
+        while (normalized.contains("，，")) {
+            normalized = normalized.replace("，，", "，");
+        }
+        return normalized;
+    }
+
+    private void flushPendingSpeechFallback() {
+        if (pendingSpeechFallbackResId == 0 || !isAdded()) {
+            pendingSpeechText = null;
+            pendingSpeechFallbackResId = 0;
+            return;
+        }
+        int fallbackResId = pendingSpeechFallbackResId;
+        pendingSpeechText = null;
+        pendingSpeechFallbackResId = 0;
+        uiHandler.post(() -> {
+            if (isAdded()) {
+                playRawSound(fallbackResId);
+            }
+        });
+    }
+
+    private void applyTextToSpeechRate() {
+        if (textToSpeech == null) {
+            return;
+        }
+        textToSpeech.setSpeechRate(isChineseLocale(ttsActiveLocale)
+                ? TTS_SPEECH_RATE_CHINESE
+                : TTS_SPEECH_RATE_DEFAULT);
+    }
+
+    private boolean isChineseLocale(@Nullable Locale locale) {
+        if (locale == null) {
+            return false;
+        }
+        String language = locale.getLanguage();
+        return language != null && language.toLowerCase(Locale.ROOT).startsWith("zh");
+    }
+
+    private void releaseTextToSpeech() {
+        pendingSpeechText = null;
+        pendingSpeechFallbackResId = 0;
+        ttsReady = false;
+        ttsInitializing = false;
+        ttsActiveLocale = Locale.getDefault();
+        if (textToSpeech != null) {
+            try {
+                textToSpeech.stop();
+            } catch (Exception ignored) {
+            }
+            textToSpeech.shutdown();
+            textToSpeech = null;
+        }
+    }
+
+    private void releaseMediaFeedback() {
         if (feedbackPlayer != null) {
             try {
                 if (feedbackPlayer.isPlaying()) {
@@ -499,6 +668,11 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             feedbackPlayer.release();
             feedbackPlayer = null;
         }
+    }
+
+    private void releaseAudioFeedback() {
+        releaseMediaFeedback();
+        releaseTextToSpeech();
     }
 
     
@@ -513,27 +687,361 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         recognitionAttemptStartedAt = 0;
     }
 
+    private void resetPendingMatch() {
+        pendingMatchEmpId = null;
+        pendingMatchCount = 0;
+        pendingMatchLastAt = 0L;
+    }
+
+    private boolean confirmStableMatch(String empId, long nowMillis) {
+        if (empId == null || empId.trim().isEmpty()) {
+            resetPendingMatch();
+            return false;
+        }
+        if (!empId.equals(pendingMatchEmpId) || nowMillis - pendingMatchLastAt > STABLE_MATCH_MAX_GAP_MS) {
+            pendingMatchEmpId = empId;
+            pendingMatchCount = 1;
+            pendingMatchLastAt = nowMillis;
+            return false;
+        }
+        pendingMatchCount += 1;
+        pendingMatchLastAt = nowMillis;
+        if (pendingMatchCount >= STABLE_MATCH_REQUIRED_FRAMES) {
+            resetPendingMatch();
+            return true;
+        }
+        return false;
+    }
+
     
     private long getRecognitionTimeoutMs() {
         return SessionManager.get().getRecognitionTimeoutSeconds() * 1000L;
     }
 
-    
-    private void showTransientFailureResult(String message) {
-        recognizing = true;
-        setStatus(message);
-        playFailFeedback();
+    private String getEmployeeDisplayName(@Nullable String employeeName, @Nullable String employeeId) {
+        if (employeeName != null) {
+            String trimmed = employeeName.trim();
+            if (!trimmed.isEmpty()) {
+                return trimmed;
+            }
+        }
+        if (employeeId != null) {
+            String trimmedId = employeeId.trim();
+            if (!trimmedId.isEmpty()) {
+                return "\u5de5\u53f7" + trimmedId;
+            }
+        }
+        return "\u8be5\u5458\u5de5";
+    }
 
-        applyResultIconStyle(false);
-        tvResult.setText(message);
+    private String buildEmployeeStatusMessage(@Nullable String employeeName,
+                                              @Nullable String employeeId,
+                                              String action,
+                                              @Nullable String detail) {
+        StringBuilder builder = new StringBuilder()
+                .append(getEmployeeDisplayName(employeeName, employeeId))
+                .append(action);
+        if (detail != null) {
+            String trimmed = detail.trim();
+            if (!trimmed.isEmpty()) {
+                builder.append("\uff1a").append(trimmed);
+            }
+        }
+        return builder.toString();
+    }
+
+    private String buildEmployeeResultMessage(@Nullable String employeeName,
+                                              @Nullable String employeeId,
+                                              String headline,
+                                              @Nullable String detail) {
+        StringBuilder builder = new StringBuilder()
+                .append(getEmployeeDisplayName(employeeName, employeeId))
+                .append('\n')
+                .append(headline);
+        if (detail != null) {
+            String trimmed = detail.trim();
+            if (!trimmed.isEmpty()) {
+                builder.append('\n').append(trimmed);
+            }
+        }
+        return builder.toString();
+    }
+
+    private String buildPunchSuccessSpeech(PunchRecord record) {
+        String displayName = getEmployeeDisplayName(record.empName, record.empId);
+        String action;
+        if (PUNCH_TYPE_FREE.equals(record.punchType)) {
+            action = "自由打卡成功";
+        } else if (Constants.PUNCH_TYPE_SIGN_IN.equals(record.punchType)) {
+            action = "上班打卡成功";
+        } else {
+            action = "下班打卡成功";
+        }
+        return displayName + "，" + action;
+    }
+
+    private String buildPunchFailureSpeech(@Nullable String employeeName,
+                                           @Nullable String employeeId,
+                                           @Nullable String detail) {
+        StringBuilder builder = new StringBuilder(getEmployeeDisplayName(employeeName, employeeId))
+                .append("，打卡失败");
+        if (detail != null) {
+            String trimmed = detail.trim();
+            if (!trimmed.isEmpty()) {
+                builder.append("，").append(trimmed);
+            }
+        }
+        return builder.toString();
+    }
+
+    private String buildForbiddenSpeech(@Nullable String employeeName,
+                                        @Nullable String employeeId,
+                                        @Nullable String detail) {
+        StringBuilder builder = new StringBuilder(getEmployeeDisplayName(employeeName, employeeId))
+                .append("，禁止打卡");
+        if (detail != null) {
+            String trimmed = detail.trim();
+            if (!trimmed.isEmpty()) {
+                builder.append("，").append(trimmed);
+            }
+        }
+        return builder.toString();
+    }
+
+    private String buildGenericFailureSpeech(@Nullable String message) {
+        if (message == null) {
+            return "操作失败，请重试";
+        }
+        String normalized = message.replace('\n', '，').replace('\r', ' ').trim();
+        if (normalized.isEmpty()) {
+            return "操作失败，请重试";
+        }
+        if ("识别超时，请重试".equals(normalized) || "识别超时，请重试。".equals(normalized)) {
+            return "识别超时，请重试";
+        }
+        if (normalized.contains("设备不支持前置相机")) {
+            return "设备不支持前置相机";
+        }
+        if (normalized.contains("设备不支持后置相机")) {
+            return "设备不支持后置相机";
+        }
+        if (normalized.contains("未找到可用相机")) {
+            return "未找到可用相机";
+        }
+        if (normalized.contains("相机权限被拒绝")) {
+            return "相机权限被拒绝";
+        }
+        if (normalized.contains("相机启动失败")) {
+            return "相机启动失败，请检查设备相机";
+        }
+        return normalized;
+    }
+
+    private CharSequence formatResultMessage(String resultMessage, boolean success) {
+        if (resultMessage == null || resultMessage.trim().isEmpty()) {
+            return "";
+        }
+        SpannableString spannable = new SpannableString(resultMessage);
+        String[] lines = resultMessage.split("\n");
+        int cursor = 0;
+        int successColor = ContextCompat.getColor(requireContext(), R.color.log_status_success);
+        int errorColor = ContextCompat.getColor(requireContext(), R.color.log_status_error);
+        int primaryColor = ContextCompat.getColor(requireContext(), R.color.text_primary);
+        int secondaryColor = ContextCompat.getColor(requireContext(), R.color.text_secondary);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            int start = cursor;
+            int end = start + line.length();
+            if (end > start) {
+                if (i == 0) {
+                    applyLineStyle(spannable, start, end, 24, primaryColor, true);
+                } else if (i == 1) {
+                    applyLineStyle(spannable, start, end, 26, success ? successColor : errorColor, true);
+                } else {
+                    applyLineStyle(spannable, start, end, 18, secondaryColor, true);
+                }
+            }
+            cursor = end + 1;
+        }
+        return spannable;
+    }
+
+    private void applyLineStyle(SpannableString spannable,
+                                int start,
+                                int end,
+                                int sizeSp,
+                                int color,
+                                boolean bold) {
+        spannable.setSpan(new AbsoluteSizeSpan(sizeSp, true), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        spannable.setSpan(new ForegroundColorSpan(color), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if (bold) {
+            spannable.setSpan(new StyleSpan(android.graphics.Typeface.BOLD), start, end,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+    }
+
+    private void showResultCard(String statusMessage, String resultMessage, boolean success) {
+        showResultCard(statusMessage, resultMessage, success, null, null, null, null);
+    }
+
+    private void showResultCard(String statusMessage,
+                                String resultMessage,
+                                boolean success,
+                                @Nullable String displayName,
+                                @Nullable String primaryAvatarSource,
+                                @Nullable String fallbackAvatarSource,
+                                @Nullable String cleanupAvatarPath) {
+        recognizing = true;
+        setStatus(statusMessage);
+        applyResultCardStyle(success);
+        bindResultAvatar(displayName, primaryAvatarSource, fallbackAvatarSource);
+        tvResult.setText(formatResultMessage(resultMessage, success));
         layoutResult.setVisibility(View.VISIBLE);
 
         uiHandler.postDelayed(() -> {
+            if (cleanupAvatarPath != null && !cleanupAvatarPath.trim().isEmpty()) {
+                PunchSnapshotHelper.deleteSnapshot(cleanupAvatarPath);
+            }
+            clearResultAvatar();
             layoutResult.setVisibility(View.GONE);
             recognizing = false;
             resetRecognitionAttempt();
+            resetPendingMatch();
             updateIdleStatus();
         }, RESULT_DISPLAY_MS);
+    }
+
+    private void bindResultAvatar(@Nullable String displayName,
+                                  @Nullable String primaryAvatarSource,
+                                  @Nullable String fallbackAvatarSource) {
+        if (layoutResultAvatar == null || ivResultAvatar == null
+                || tvResultAvatarFallback == null || tvResultAvatarTag == null) {
+            return;
+        }
+        String snapshotSource = sanitizeLocalImageSource(primaryAvatarSource);
+        String fallbackSource = sanitizeImageSource(fallbackAvatarSource);
+        String selectedSource = snapshotSource != null ? snapshotSource : fallbackSource;
+        String avatarName = displayName != null ? displayName : "";
+        if (selectedSource == null && avatarName.trim().isEmpty()) {
+            clearResultAvatar();
+            layoutResultAvatar.setVisibility(View.GONE);
+            return;
+        }
+        layoutResultAvatar.setVisibility(View.VISIBLE);
+        if (selectedSource != null) {
+            AvatarLoader.load(ivResultAvatar, tvResultAvatarFallback, avatarName, selectedSource);
+        } else {
+            AvatarLoader.clear(ivResultAvatar);
+            tvResultAvatarFallback.setText(getEmployeeDisplayName(displayName, null).substring(0, 1));
+            tvResultAvatarFallback.setVisibility(View.VISIBLE);
+        }
+        if (snapshotSource != null) {
+            tvResultAvatarTag.setVisibility(View.VISIBLE);
+            tvResultAvatarTag.setText("本次抓拍");
+        } else if (fallbackSource != null) {
+            tvResultAvatarTag.setVisibility(View.VISIBLE);
+            tvResultAvatarTag.setText("员工库照");
+        } else {
+            tvResultAvatarTag.setVisibility(View.GONE);
+        }
+    }
+
+    private void clearResultAvatar() {
+        if (layoutResultAvatar != null) {
+            layoutResultAvatar.setVisibility(View.GONE);
+        }
+        if (ivResultAvatar != null) {
+            AvatarLoader.clear(ivResultAvatar);
+        }
+        if (tvResultAvatarFallback != null) {
+            tvResultAvatarFallback.setText("");
+        }
+        if (tvResultAvatarTag != null) {
+            tvResultAvatarTag.setVisibility(View.GONE);
+        }
+    }
+
+    @Nullable
+    private String sanitizeLocalImageSource(@Nullable String source) {
+        if (source == null) {
+            return null;
+        }
+        String trimmed = source.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        File file = new File(trimmed);
+        if (!file.exists() || !file.isFile()) {
+            return null;
+        }
+        return file.getAbsolutePath();
+    }
+
+    @Nullable
+    private String sanitizeImageSource(@Nullable String source) {
+        String local = sanitizeLocalImageSource(source);
+        if (local != null) {
+            return local;
+        }
+        if (source == null) {
+            return null;
+        }
+        String trimmed = source.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private void showEmployeeLookupFailure(String empId) {
+        String statusMessage = buildEmployeeStatusMessage(
+                null,
+                empId,
+                "\u6253\u5361\u5931\u8d25",
+                "\u672a\u627e\u5230\u672c\u5730\u5458\u5de5\u6570\u636e"
+        );
+        playFailFeedback(buildPunchFailureSpeech(null, empId, "\u672a\u627e\u5230\u672c\u5730\u5458\u5de5\u6570\u636e"));
+        showResultCard(
+                statusMessage,
+                buildEmployeeResultMessage(
+                        null,
+                        empId,
+                        "\u6253\u5361\u5931\u8d25",
+                        "\u672a\u627e\u5230\u672c\u5730\u5458\u5de5\u6570\u636e"
+                ),
+                false,
+                getEmployeeDisplayName(null, empId),
+                null,
+                null,
+                null
+        );
+    }
+
+    private void showSnapshotCaptureFailure(Employee emp) {
+        String statusMessage = buildEmployeeStatusMessage(
+                emp.name,
+                emp.id,
+                "\u6253\u5361\u5931\u8d25",
+                "\u4eba\u8138\u6293\u62cd\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5"
+        );
+        playFailFeedback(buildPunchFailureSpeech(emp.name, emp.id, "\u4eba\u8138\u6293\u62cd\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5"));
+        showResultCard(
+                statusMessage,
+                buildEmployeeResultMessage(
+                        emp.name,
+                        emp.id,
+                        "\u6253\u5361\u5931\u8d25",
+                        "\u4eba\u8138\u6293\u62cd\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5"
+                ),
+                false,
+                getEmployeeDisplayName(emp.name, emp.id),
+                null,
+                emp.faceImageUrl,
+                null
+        );
+    }
+
+    
+    private void showTransientFailureResult(String message) {
+        playFailFeedback(buildGenericFailureSpeech(message));
+        showResultCard(message, message, false);
     }
 
 
@@ -578,8 +1086,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             if (cameraId < 0) {
                 waitingFirstPreviewFrame = false;
                 hideCameraLoading();
-                setStatus("\u672a\u627e\u5230\u53ef\u7528\u76f8\u673a");
-                playFailFeedback();
+                String failureMessage = "\u672a\u627e\u5230\u53ef\u7528\u76f8\u673a";
+                setStatus(failureMessage);
+                playFailFeedback(buildGenericFailureSpeech(failureMessage));
                 return;
             }
             camera = Camera.open(cameraId);
@@ -622,9 +1131,11 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 int h = p.getPreviewSize().height;
                 byte[] frameCopy = data.clone();
 
+                final int snapshotRotation = getSnapshotRotation(cameraId);
+
                 executor.execute(() -> {
                     try {
-                        processFrame(frameCopy, w, h, frameRotation, frameMirror);
+                        processFrame(frameCopy, w, h, frameRotation, frameMirror, snapshotRotation);
                     } finally {
                         frameProcessing = false;
                     }
@@ -638,8 +1149,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             hideCameraLoading();
             Log.e(TAG, "openCamera error", e);
             releaseCamera();
-            setStatus("\u76f8\u673a\u542f\u52a8\u5931\u8d25: " + e.getMessage());
-            playFailFeedback();
+            String failureMessage = "\u76f8\u673a\u542f\u52a8\u5931\u8d25: " + e.getMessage();
+            setStatus(failureMessage);
+            playFailFeedback(buildGenericFailureSpeech(failureMessage));
         } finally {
             openingCamera = false;
         }
@@ -735,8 +1247,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             } else {
                 waitingFirstPreviewFrame = false;
                 hideCameraLoading();
-                setStatus("\u76f8\u673a\u6743\u9650\u88ab\u62d2\u7edd");
-                playFailFeedback();
+                String failureMessage = "\u76f8\u673a\u6743\u9650\u88ab\u62d2\u7edd";
+                setStatus(failureMessage);
+                playFailFeedback(buildGenericFailureSpeech(failureMessage));
             }
         }
     }
@@ -770,7 +1283,12 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
 
     
-    private void processFrame(byte[] nv21, int width, int height, int angle, int mirror) {
+    private void processFrame(byte[] nv21,
+                              int width,
+                              int height,
+                              int angle,
+                              int mirror,
+                              int snapshotRotation) {
         if (recognizing || !punchEnabled) return;
         PunchApplication app = PunchApplication.get();
         if (app != null && !app.isPunchRecognitionReady()) {
@@ -792,9 +1310,14 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         long durationMs = System.currentTimeMillis() - startedAt;
 
         if (!result.matched) {
+            resetPendingMatch();
             if (FaceManager.ERROR_NO_FACE_DETECTED.equals(result.errorMsg)) {
                 resetRecognitionAttempt();
                 return;
+            }
+
+            if (FaceManager.ERROR_LIVENESS_CHECK_FAILED.equals(result.errorMsg)) {
+                logLivenessFailure(width, height, angle, mirror, durationMs);
             }
 
             beginRecognitionAttempt();
@@ -813,17 +1336,63 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
 
         resetRecognitionAttempt();
-
-        Employee emp = DatabaseHelper.get(requireContext()).getEmployee(result.empId);
-        if (emp == null) {
-            uiHandler.post(() -> {
-                setStatus("\u672a\u627e\u5230\u5458\u5de5\u6570\u636e");
-                playFailFeedback();
-            });
+        long matchedAt = System.currentTimeMillis();
+        if (!confirmStableMatch(result.empId, matchedAt)) {
+            uiHandler.post(() -> setStatus("\u6b63\u5728\u786e\u8ba4\u8eab\u4efd..."));
             return;
         }
 
-        uiHandler.post(() -> doPunch(emp, result.score, durationMs));
+        Employee emp = DatabaseHelper.get(requireContext()).getEmployee(result.empId);
+        if (emp == null) {
+            uiHandler.post(() -> showEmployeeLookupFailure(result.empId));
+            return;
+        }
+
+        String clientRecordId = "P" + SessionManager.get().getDeviceId() + "_" + UlidGenerator.generate();
+        PunchSnapshotHelper.Snapshot snapshot = PunchSnapshotHelper.capture(
+                requireContext().getApplicationContext(),
+                clientRecordId,
+                nv21,
+                width,
+                height,
+                snapshotRotation,
+                mirror
+        );
+        uiHandler.post(() -> doPunch(emp, result.score, durationMs, clientRecordId, snapshot));
+    }
+
+    private void logLivenessFailure(int width, int height, int angle, int mirror, long durationMs) {
+        long now = System.currentTimeMillis();
+        if (now - lastLivenessDebugLogAt < LIVENESS_DEBUG_LOG_COOLDOWN_MS) {
+            return;
+        }
+        lastLivenessDebugLogAt = now;
+        String detail = "width=" + width
+                + ", height=" + height
+                + ", angle=" + angle
+                + ", mirror=" + mirror
+                + ", cameraFacing=" + cameraFacing
+                + ", frameRotation=" + frameRotation
+                + ", frameMirror=" + frameMirror
+                + ", previewWidth=" + previewWidth
+                + ", previewHeight=" + previewHeight
+                + ", durationMs=" + durationMs;
+        AppLogger.w(TAG, "Liveness check failed: " + detail);
+        InteractionLogger.logBusinessFailure(
+                InteractionLogger.GROUP_PUNCH,
+                "活体检测失败",
+                detail
+        );
+    }
+
+    private int getSnapshotRotation(int targetCameraId) {
+        Camera.CameraInfo info = new Camera.CameraInfo();
+        Camera.getCameraInfo(targetCameraId, info);
+        int degrees = getDisplayDegrees();
+        if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            return (info.orientation + degrees) % 360;
+        }
+        return (info.orientation - degrees + 360) % 360;
     }
 
     
@@ -849,7 +1418,18 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     }
 
     private boolean isSelectedFreePunch() {
-        return spinnerShift != null && spinnerShift.getSelectedItemPosition() == FREE_PUNCH_OPTION_VALUE;
+        return FREE_PUNCH_OPTION_LABEL.equals(getSelectedPunchOptionLabel());
+    }
+
+    private int getSelectedClockIndex() {
+        if (spinnerShift == null) {
+            return FREE_PUNCH_OPTION_VALUE;
+        }
+        if (isSelectedFreePunch()) {
+            return FREE_PUNCH_OPTION_VALUE;
+        }
+        int selectedIndex = spinnerShift.getSelectedItemPosition();
+        return selectedIndex >= 0 ? selectedIndex + 1 : FREE_PUNCH_OPTION_VALUE;
     }
 
     
@@ -894,30 +1474,31 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private void showForbiddenPunchDialog(Employee emp, String status) {
         uiHandler.post(() -> {
             String statusLabel = getStatusLabel(status);
-            setStatus("\u7981\u6b62\u6253\u5361\uff1a" + statusLabel);
-            playForbiddenFeedback();
-
-            applyResultIconStyle(false);
-            tvResult.setText(String.format(
-                    Locale.getDefault(),
-                    "%s\n\u7981\u6b62\u6253\u5361\n%s",
-                    emp.name, statusLabel));
-            layoutResult.setVisibility(View.VISIBLE);
-
-            uiHandler.postDelayed(() -> {
-                layoutResult.setVisibility(View.GONE);
-                recognizing = false;
-                resetRecognitionAttempt();
-                updateIdleStatus();
-            }, RESULT_DISPLAY_MS);
+            String statusMessage = buildEmployeeStatusMessage(emp.name, emp.id, "\u7981\u6b62\u6253\u5361", statusLabel);
+            playForbiddenFeedback(buildForbiddenSpeech(emp.name, emp.id, statusLabel));
+            showResultCard(
+                    statusMessage,
+                    buildEmployeeResultMessage(emp.name, emp.id, "\u7981\u6b62\u6253\u5361", statusLabel),
+                    false,
+                    getEmployeeDisplayName(emp.name, emp.id),
+                    null,
+                    emp.faceImageUrl,
+                    null
+            );
         });
     }
 
-    private void doPunch(Employee emp, float matchScore, long durationMs) {
+    private void doPunch(Employee emp,
+                         float matchScore,
+                         long durationMs,
+                         String clientRecordId,
+                         @Nullable PunchSnapshotHelper.Snapshot snapshot) {
         recognizing = true;
 
         String deviceId = SessionManager.get().getDeviceId();
         String lineCode = SessionManager.get().getLineCode();
+        int teamBindingId = SessionManager.get().getTeamBindingId();
+        int clockIndex = getSelectedClockIndex();
         String status = emp.status != null ? emp.status : Constants.STATUS_NORMAL;
         String shiftLabel = getSelectedPunchOptionLabel();
         long punchTime = resolvePunchTimeSeconds();
@@ -925,12 +1506,24 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
         if (isForbiddenStatus(status)) {
             showForbiddenPunchDialog(emp, status);
+            if (snapshot != null) {
+                uiHandler.postDelayed(() -> PunchSnapshotHelper.deleteSnapshot(snapshot.path), RESULT_DISPLAY_MS);
+            }
+            return;
+        }
+
+        if (shouldBlockPunchByCheckCount(emp.id, punchDate, lineCode, teamBindingId, clockIndex)) {
+            showCheckCountLimitReached(emp, snapshot);
+            return;
+        }
+        if (snapshot == null) {
+            showSnapshotCaptureFailure(emp);
             return;
         }
 
         PunchRecord record = new PunchRecord();
         record.id = UlidGenerator.generate();
-        record.clientRecordId = "P" + deviceId + "_" + UlidGenerator.generate();
+        record.clientRecordId = clientRecordId;
         record.empId = emp.id;
         record.empName = emp.name;
         record.dept = emp.dept;
@@ -939,20 +1532,78 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         record.punchType = punchType;
         record.shiftName = shiftLabel;
         record.lineCode = lineCode;
+        record.teamBindingId = teamBindingId;
+        record.clockIndex = clockIndex;
+        record.matchScore = matchScore;
+        record.snapImagePath = snapshot.path;
+        record.snapImageMimeType = snapshot.mimeType;
+        record.snapImageWidth = snapshot.width;
+        record.snapImageHeight = snapshot.height;
+        record.snapImageSize = snapshot.sizeBytes;
+        record.snapCapturedAt = snapshot.capturedAtSeconds;
         record.isSynced = 0;
 
         savePunchAndSync(record);
+    }
+
+    private boolean shouldBlockPunchByCheckCount(String empId,
+                                                 String punchDate,
+                                                 String lineCode,
+                                                 int teamBindingId,
+                                                 int clockIndex) {
+        int checkCount = SessionManager.get().getCheckCount();
+        if (checkCount <= 0 || lineCode == null || lineCode.trim().isEmpty() || teamBindingId <= 0) {
+            return false;
+        }
+        List<String> signedEmpIds = DatabaseHelper.get(requireContext())
+                .getSignedEmpIds(punchDate, lineCode, teamBindingId, clockIndex);
+        if (signedEmpIds.contains(empId)) {
+            return false;
+        }
+        return signedEmpIds.size() >= checkCount;
+    }
+
+    private void showCheckCountLimitReached(Employee emp, @Nullable PunchSnapshotHelper.Snapshot snapshot) {
+        String statusMessage = buildEmployeeStatusMessage(
+                emp.name,
+                emp.id,
+                "\u7981\u6b62\u6253\u5361",
+                "\u5f53\u524d\u73ed\u6b21\u4eba\u6570\u5df2\u8fbe\u4e0a\u9650"
+        );
+        playForbiddenFeedback(buildForbiddenSpeech(emp.name, emp.id, "\u5f53\u524d\u73ed\u6b21\u4eba\u6570\u5df2\u8fbe\u4e0a\u9650"));
+        showResultCard(
+                statusMessage,
+                buildEmployeeResultMessage(emp.name, emp.id, "\u7981\u6b62\u6253\u5361", "\u5f53\u524d\u73ed\u6b21\u4eba\u6570\u5df2\u8fbe\u4e0a\u9650"),
+                false,
+                getEmployeeDisplayName(emp.name, emp.id),
+                snapshot != null ? snapshot.path : null,
+                emp.faceImageUrl,
+                snapshot != null ? snapshot.path : null
+        );
     }
 
     
     private void savePunchAndSync(PunchRecord record) {
         boolean inserted = DatabaseHelper.get(requireContext()).insertPunchRecord(record);
         if (!inserted) {
+            Employee employee = DatabaseHelper.get(requireContext()).getEmployee(record.empId);
             uiHandler.post(() -> {
-                recognizing = false;
-                resetRecognitionAttempt();
-                setStatus("\u6253\u5361\u8bb0\u5f55\u5df2\u5b58\u5728");
-                playFailFeedback();
+                String statusMessage = buildEmployeeStatusMessage(
+                        record.empName,
+                        record.empId,
+                        "\u6253\u5361\u5931\u8d25",
+                        "\u6253\u5361\u8bb0\u5f55\u5df2\u5b58\u5728"
+                );
+                playFailFeedback(buildPunchFailureSpeech(record.empName, record.empId, "\u6253\u5361\u8bb0\u5f55\u5df2\u5b58\u5728"));
+                showResultCard(
+                        statusMessage,
+                        buildEmployeeResultMessage(record.empName, record.empId, "\u6253\u5361\u5931\u8d25", "\u6253\u5361\u8bb0\u5f55\u5df2\u5b58\u5728"),
+                        false,
+                        getEmployeeDisplayName(record.empName, record.empId),
+                        record.snapImagePath,
+                        employee != null ? employee.faceImageUrl : null,
+                        record.snapImagePath
+                );
             });
             return;
         }
@@ -980,6 +1631,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private void showPunchResult(PunchRecord record, boolean synced) {
         String timeStr = new SimpleDateFormat("HH:mm:ss", Locale.getDefault())
                 .format(new Date(record.punchTime * 1000));
+        Employee employee = DatabaseHelper.get(requireContext()).getEmployee(record.empId);
         String typeStr;
         if (PUNCH_TYPE_FREE.equals(record.punchType)) {
             typeStr = FREE_PUNCH_OPTION_LABEL;
@@ -989,19 +1641,17 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                     : "\u4e0b\u73ed\u6253\u5361";
         }
         String syncStr = synced ? "\u5df2\u540c\u6b65" : "\u5df2\u79bb\u7ebf\u4fdd\u5b58";
-
-        applyResultIconStyle(true);
-        tvResult.setText(record.empName + "\n" + typeStr + " " + timeStr + "\n" + syncStr);
-        layoutResult.setVisibility(View.VISIBLE);
+        String statusMessage = buildEmployeeStatusMessage(record.empName, record.empId, "\u6253\u5361\u6210\u529f", null);
+        showResultCard(
+                statusMessage,
+                buildEmployeeResultMessage(record.empName, record.empId, "\u6253\u5361\u6210\u529f", typeStr + " " + timeStr + "\n" + syncStr),
+                true,
+                getEmployeeDisplayName(record.empName, record.empId),
+                record.snapImagePath,
+                employee != null ? employee.faceImageUrl : null,
+                null
+        );
         playPunchFeedback(record);
-
-        uiHandler.postDelayed(() -> {
-            recognizing = false;
-            resetRecognitionAttempt();
-            layoutResult.setVisibility(View.GONE);
-            updateIdleStatus();
-        }, RESULT_DISPLAY_MS);
-
         SyncService.triggerSync(requireContext());
     }
 
@@ -1219,15 +1869,13 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     }
 
     
-    private void applyResultIconStyle(boolean success) {
-        if (tvResultIcon == null) {
+    private void applyResultCardStyle(boolean success) {
+        if (layoutResult == null) {
             return;
         }
-        tvResultIcon.setText(success ? "\u2713" : "!");
-        tvResultIcon.setBackgroundResource(success
-                ? R.drawable.bg_result_icon_success
-                : R.drawable.bg_result_icon_error);
-        tvResultIcon.setTextColor(ContextCompat.getColor(requireContext(), R.color.white));
+        layoutResult.setBackgroundResource(success
+                ? R.drawable.bg_result_card_success
+                : R.drawable.bg_result_card_error);
     }
 
     
@@ -1276,6 +1924,10 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         hideCameraLoading();
         uiHandler.removeCallbacks(hideStatusPanelRunnable);
         setScreenOnLocked(false);
+        releaseMediaFeedback();
+        if (textToSpeech != null) {
+            textToSpeech.stop();
+        }
         super.onPause();
         if (previewFullscreen) {
             setPreviewFullscreen(false);
@@ -1322,9 +1974,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         if (spinnerShift == null || punchOptionAdapter == null) {
             return;
         }
-        String currentSelection = getSelectedPunchOptionLabel();
+        Object selectedItem = spinnerShift.getSelectedItem();
+        String currentSelection = selectedItem != null ? selectedItem.toString() : null;
         punchOptions.clear();
-        punchOptions.add(FREE_PUNCH_OPTION_LABEL);
         for (String timeRange : SessionManager.get().getCurrentTeamTimeRanges()) {
             if (timeRange == null) {
                 continue;
@@ -1336,10 +1988,14 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             punchOptions.add(range + " \u4e0a\u73ed");
             punchOptions.add(range + " \u4e0b\u73ed");
         }
+        punchOptions.add(FREE_PUNCH_OPTION_LABEL);
         punchOptionAdapter.notifyDataSetChanged();
-        int selectedIndex = punchOptions.indexOf(currentSelection);
+        int selectedIndex = currentSelection != null ? punchOptions.indexOf(currentSelection) : -1;
         if (selectedIndex < 0) {
-            selectedIndex = FREE_PUNCH_OPTION_VALUE;
+            selectedIndex = punchOptions.size() > 1 ? 0 : punchOptions.indexOf(FREE_PUNCH_OPTION_LABEL);
+        }
+        if (selectedIndex < 0) {
+            selectedIndex = 0;
         }
         spinnerShift.setSelection(selectedIndex);
         updatePunchTypeFromSelection();

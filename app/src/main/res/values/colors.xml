@@ -11,4 +11,10 @@
     <color name="text_primary">#1D1D1F</color>
     <color name="text_secondary">#5F6368</color>
     <color name="divider">#DDE1E6</color>
+    <color name="log_status_success_bg">#E6F4EA</color>
+    <color name="log_status_success">#1E8E3E</color>
+    <color name="log_status_error_bg">#FCE8E6</color>
+    <color name="log_status_error">#C5221F</color>
+    <color name="log_detail_bg">#F6F8FB</color>
+    <color name="log_filter_text">#0D5FA8</color>
 </resources>

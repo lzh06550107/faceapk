@@ -10,6 +10,7 @@ import com.punch.app.model.Employee;
 import com.punch.app.model.PunchRecord;
 import com.punch.app.model.SyncQueueItem;
 import com.punch.app.network.ApiResult;
+import com.punch.app.network.InteractionLogger;
 import com.punch.app.network.ApiService;
 import com.punch.app.network.dto.DeviceDto;
 import com.punch.app.network.dto.EmployeeSyncData;
@@ -106,6 +107,11 @@ public final class SyncCoordinator {
         ApiResult<HeartbeatDto.HeartbeatData> heartbeat = ApiService.fetchHeartbeat(appContext);
         if (!heartbeat.success || heartbeat.data == null) {
             AppLogger.w(TAG, "Heartbeat failed: " + heartbeat.message);
+            InteractionLogger.logBusinessFailure(
+                    InteractionLogger.GROUP_HEARTBEAT,
+                    "心跳请求失败",
+                    safeString(heartbeat.message)
+            );
             return;
         }
 
@@ -116,6 +122,11 @@ public final class SyncCoordinator {
         }
 
         if (heartbeat.data.hasChanges && !heartbeat.data.events.isEmpty()) {
+            InteractionLogger.logBusiness(
+                    InteractionLogger.GROUP_HEARTBEAT,
+                    "收到平台事件",
+                    "事件数 " + heartbeat.data.events.size()
+            );
             applyHeartbeatEvents(appContext, heartbeat.data.events);
         }
     }
@@ -123,15 +134,20 @@ public final class SyncCoordinator {
     private void applyHeartbeatEvents(Context appContext, List<HeartbeatDto.HeartbeatEventData> events) {
         for (HeartbeatDto.HeartbeatEventData event : events) {
             if (event == null || isBlank(event.cursor)) {
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_HEARTBEAT,
+                        "收到无效事件",
+                        "缺少 cursor，事件已跳过"
+                );
                 continue;
             }
 
-            EventProcessingOutcome outcome;
-            if (!isEventInScope(event)) {
-                outcome = EventProcessingOutcome.success();
-            } else {
-                outcome = handleEvent(appContext, event);
-            }
+            InteractionLogger.logBusiness(
+                    resolveEventGroup(event.eventType),
+                    "开始处理平台事件",
+                    "cursor=" + event.cursor + "\nevent_type=" + safeString(event.eventType)
+            );
+            EventProcessingOutcome outcome = handleEvent(appContext, event);
 
             ApiResult<Void> ackResult = ApiService.reportEventResult(
                     event.cursor,
@@ -142,10 +158,25 @@ public final class SyncCoordinator {
             );
             if (!ackResult.success) {
                 AppLogger.w(TAG, "Event result report failed: " + ackResult.message + ", cursor=" + event.cursor);
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_EVENT_RESULT,
+                        "事件结果回传失败",
+                        "cursor=" + event.cursor + "\nreason=" + safeString(ackResult.message)
+                );
                 break;
             }
+            InteractionLogger.logBusiness(
+                    InteractionLogger.GROUP_EVENT_RESULT,
+                    "事件结果已回传",
+                    "cursor=" + event.cursor + "\nsuccess=" + outcome.success
+            );
             if (!outcome.success) {
                 AppLogger.w(TAG, "Event handled with failure: cursor=" + event.cursor + ", reason=" + outcome.failureMessage);
+                InteractionLogger.logBusinessFailure(
+                        resolveEventGroup(event.eventType),
+                        "平台事件处理失败",
+                        "cursor=" + event.cursor + "\nreason=" + safeString(outcome.failureMessage)
+                );
                 break;
             }
         }
@@ -171,21 +202,6 @@ public final class SyncCoordinator {
         return result.eventSuccess
                 ? EventProcessingOutcome.success(result.employeeResults)
                 : EventProcessingOutcome.failure(result.failureMessage, result.employeeResults);
-    }
-
-    private boolean isEventInScope(HeartbeatDto.HeartbeatEventData event) {
-        String scopeType = safeString(event.scopeType);
-        String scopeValue = safeString(event.scopeValue);
-        if (scopeType.isEmpty() || "global".equals(scopeType)) {
-            return true;
-        }
-        if ("device".equals(scopeType)) {
-            return scopeValue.isEmpty() || scopeValue.equals(SessionManager.get().getDeviceId());
-        }
-        if ("line".equals(scopeType)) {
-            return scopeValue.isEmpty() || scopeValue.equals(SessionManager.get().getLineCode());
-        }
-        return true;
     }
 
     private void syncPunches(Context context) {
@@ -229,12 +245,22 @@ public final class SyncCoordinator {
         if (app != null) {
             app.reportStatusEvent("\u6536\u5230\u914d\u7f6e\u53d8\u66f4\uff0c\u6b63\u5728\u540c\u6b65\u8bbe\u5907\u914d\u7f6e...", PunchApplication.STATUS_LEVEL_PROGRESS);
         }
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_DEVICE_CONFIG,
+                "开始同步设备配置",
+                "收到 config_changed 事件，准备拉取最新配置"
+        );
         ApiResult<DeviceDto.DeviceConfigData> result = ApiService.fetchDeviceConfig();
         if (!result.success || result.data == null) {
             if (app != null) {
                 app.reportStatusEvent("\u8bbe\u5907\u914d\u7f6e\u540c\u6b65\u5931\u8d25\uff0c\u7b49\u5f85\u91cd\u8bd5", PunchApplication.STATUS_LEVEL_ERROR);
             }
             AppLogger.w(TAG, "Device config sync failed: " + result.message);
+            InteractionLogger.logBusinessFailure(
+                    InteractionLogger.GROUP_DEVICE_CONFIG,
+                    "设备配置同步失败",
+                    safeString(result.message)
+            );
             return false;
         }
 
@@ -245,6 +271,11 @@ public final class SyncCoordinator {
         if (FaceManager.get().isInitialized()) {
             FaceManager.get().refreshRuntimeConfig();
         }
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_DEVICE_CONFIG,
+                "设备配置同步完成",
+                "本地配置已更新"
+        );
         return true;
     }
 
@@ -265,6 +296,7 @@ public final class SyncCoordinator {
                 data,
                 preserveLocalBindings ? SessionManager.get().getTeamBindingId() : data.teamBindingId
         ));
+        SessionManager.get().saveCheckCount(data.checkCount);
         if (!isBlank(data.account)) {
             SessionManager.get().saveAccount(data.account);
         }
@@ -303,6 +335,11 @@ public final class SyncCoordinator {
         if (app != null) {
             app.beginPunchDataPreparation("正在同步员工数据...");
         }
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                "开始同步员工列表",
+                collectEventResults ? "事件模式：需要回传逐员工结果" : "准备模式：仅构建本地人脸数据"
+        );
         DatabaseHelper db = DatabaseHelper.get(context);
         int page = 1;
         LinkedHashMap<String, EventResultDto.EmployeeResult> employeeResults =
@@ -317,6 +354,11 @@ public final class SyncCoordinator {
                     app.markPunchRecognitionFailed("\u5458\u5de5\u540c\u6b65\u5931\u8d25\uff0c\u7b49\u5f85\u91cd\u8bd5");
                 }
                 AppLogger.w(TAG, "Employee sync failed: " + result.message);
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                        "员工同步失败",
+                        "page=" + page + "\nreason=" + safeString(result.message)
+                );
                 return EmployeeSyncProcessingResult.failure(
                         FAILURE_MSG_EMPLOYEE_SYNC_FAILED,
                         toEmployeeResultList(employeeResults)
@@ -394,6 +436,11 @@ public final class SyncCoordinator {
                 if (data.serverTime > 0) {
                     SessionManager.get().saveLastServerTime(data.serverTime);
                 }
+                InteractionLogger.logBusiness(
+                        InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                        "员工列表拉取完成",
+                        "最后页 page=" + page + "\n变更数 " + data.changeItems.size()
+                );
                 break;
             }
             page += 1;
@@ -404,6 +451,11 @@ public final class SyncCoordinator {
                 app.markPunchRecognitionFailed("\u4eba\u8138\u5f15\u64ce\u672a\u5c31\u7eea\uff0c\u65e0\u6cd5\u91cd\u5efa\u4eba\u8138\u5e93");
             }
             AppLogger.w(TAG, "Employee sync applied but face SDK is not ready");
+            InteractionLogger.logBusinessFailure(
+                    InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                    "员工数据已入库，但人脸引擎未就绪",
+                    FAILURE_MSG_FACE_SDK_NOT_READY
+            );
             markPendingRegistrationsFailed(
                     employeeResults,
                     registrationTargets,
@@ -419,6 +471,11 @@ public final class SyncCoordinator {
             app.updatePunchDataPreparationStatus("\u6b63\u5728\u91cd\u5efa\u4eba\u8138\u5e93...");
         }
         FaceManager.get().rebuildFaceLibrary(context);
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                "开始重建本地人脸库",
+                collectEventResults ? "仅处理本次事件涉及的人员" : "处理当前全部待注册人员"
+        );
         if (collectEventResults) {
             FaceRegistrationOutcome registrationOutcome = waitForFaceRegistration(
                     context,
@@ -436,6 +493,11 @@ public final class SyncCoordinator {
                 if (app != null) {
                     app.markPunchRecognitionFailed(STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED);
                 }
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                        "人脸注册未完整完成",
+                        FAILURE_MSG_FACE_REGISTRATION_INCOMPLETE
+                );
                 return EmployeeSyncProcessingResult.failure(
                         FAILURE_MSG_FACE_REGISTRATION_INCOMPLETE,
                         toEmployeeResultList(employeeResults)
@@ -444,6 +506,11 @@ public final class SyncCoordinator {
             if (app != null) {
                 publishPreparationOutcome(app, registrationOutcome);
             }
+            InteractionLogger.logBusiness(
+                    InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                    "员工事件处理完成",
+                    "成功 " + registrationOutcome.succeeded + "\n失败 " + registrationOutcome.failed
+            );
             return EmployeeSyncProcessingResult.success(true, finalResults);
         }
 
@@ -452,6 +519,11 @@ public final class SyncCoordinator {
         if (app != null) {
             publishPreparationOutcome(app, registrationOutcome);
         }
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                "准备模式员工同步完成",
+                "可用状态 " + ready + "\n成功 " + registrationOutcome.succeeded + "\n失败 " + registrationOutcome.failed
+        );
         return EmployeeSyncProcessingResult.success(ready, new ArrayList<>());
     }
 
@@ -520,10 +592,20 @@ public final class SyncCoordinator {
         try {
             if (!latch.await(FACE_REGISTRATION_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 AppLogger.w(TAG, "Face registration timed out");
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                        "等待人脸注册超时",
+                        "超时时间 " + FACE_REGISTRATION_TIMEOUT_SECONDS + " 秒"
+                );
                 return FaceRegistrationOutcome.timeout(holder.get());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            InteractionLogger.logBusinessFailure(
+                    InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                    "等待人脸注册被中断",
+                    safeString(e.getMessage())
+            );
             return FaceRegistrationOutcome.failure(holder.get());
         }
 
@@ -538,6 +620,11 @@ public final class SyncCoordinator {
         }
 
         AppLogger.i(TAG, "Face registration: ok=" + ok + " fail=" + fail);
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                "人脸注册结果",
+                "成功 " + ok + "\n失败 " + fail
+        );
         return FaceRegistrationOutcome.success(holder.get(), ok, fail);
     }
 
@@ -570,6 +657,16 @@ public final class SyncCoordinator {
 
     private String safeOpType(String opType) {
         return isBlank(opType) ? "sync" : opType.trim();
+    }
+
+    private String resolveEventGroup(String eventType) {
+        if ("person_changed".equals(safeString(eventType))) {
+            return InteractionLogger.GROUP_EMPLOYEE_SYNC;
+        }
+        if ("config_changed".equals(safeString(eventType))) {
+            return InteractionLogger.GROUP_DEVICE_CONFIG;
+        }
+        return InteractionLogger.GROUP_GENERAL;
     }
 
     private List<EventResultDto.EmployeeResult> applyRegistrationResults(

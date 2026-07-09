@@ -10,8 +10,6 @@ public final class HeartbeatDto {
     public static final class HeartbeatEventData {
         public String cursor = "";
         public String eventType = "";
-        public String scopeType = "";
-        public String scopeValue = "";
     }
 
     public static final class HeartbeatData {

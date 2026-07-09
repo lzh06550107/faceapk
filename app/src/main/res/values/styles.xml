@@ -18,4 +18,18 @@
         <item name="android:padding">14dp</item>
     </style>
 
+    <style name="LogFilterChip">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">36dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
+        <item name="android:button">@null</item>
+        <item name="android:background">@drawable/bg_log_filter_chip</item>
+        <item name="android:gravity">center</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:paddingLeft">14dp</item>
+        <item name="android:paddingRight">14dp</item>
+        <item name="android:textColor">@color/log_filter_text_selector</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
 </resources>

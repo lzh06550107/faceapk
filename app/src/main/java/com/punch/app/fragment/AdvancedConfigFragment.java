@@ -19,8 +19,11 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textfield.MaterialAutoCompleteTextView;
 import com.punch.app.R;
+import com.punch.app.activity.InteractionLogActivity;
+import com.punch.app.activity.LocalEmployeeDebugActivity;
 import com.punch.app.activation.BaiduDeviceFingerprint;
 import com.punch.app.face.FaceManager;
 import com.punch.app.utils.Constants;
@@ -58,6 +61,8 @@ public class AdvancedConfigFragment extends Fragment {
     private Button btnCopyFingerprint;
     private Button btnSaveConfig;
     private Button btnKioskMode;
+    private MaterialButton btnViewLogs;
+    private MaterialButton btnViewLocalEmployees;
 
     private ArrayAdapter<String> distanceModeAdapter;
     private ArrayAdapter<Integer> recognitionTimeoutAdapter;
@@ -95,6 +100,8 @@ public class AdvancedConfigFragment extends Fragment {
         btnCopyFingerprint = view.findViewById(R.id.btn_copy_fingerprint);
         btnSaveConfig = view.findViewById(R.id.btn_save_config);
         btnKioskMode = view.findViewById(R.id.btn_kiosk_mode);
+        btnViewLogs = view.findViewById(R.id.btn_view_logs);
+        btnViewLocalEmployees = view.findViewById(R.id.btn_view_local_employees);
 
         setupConfigDropdowns();
         setupThresholdListeners();
@@ -102,6 +109,10 @@ public class AdvancedConfigFragment extends Fragment {
         btnCopyFingerprint.setOnClickListener(v -> copyBaiduFingerprint());
         btnSaveConfig.setOnClickListener(v -> saveConfig());
         btnKioskMode.setOnClickListener(v -> toggleKioskMode());
+        btnViewLogs.setOnClickListener(v ->
+                startActivity(new android.content.Intent(requireContext(), InteractionLogActivity.class)));
+        btnViewLocalEmployees.setOnClickListener(v ->
+                startActivity(new android.content.Intent(requireContext(), LocalEmployeeDebugActivity.class)));
 
         renderConfig();
     }

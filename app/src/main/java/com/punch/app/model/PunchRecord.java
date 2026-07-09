@@ -22,6 +22,24 @@ public class PunchRecord {
     public String shiftName;
     
     public String lineCode;
+
+    public int teamBindingId;
+
+    public int clockIndex;
+
+    public double matchScore;
+
+    public String snapImagePath;
+
+    public String snapImageMimeType;
+
+    public int snapImageWidth;
+
+    public int snapImageHeight;
+
+    public long snapImageSize;
+
+    public long snapCapturedAt;
     
     public int isSynced;
 }

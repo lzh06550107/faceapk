@@ -369,7 +369,6 @@ public class RecordsFragment extends Fragment {
         final String date = selectedDate;
         final String lineCode = SessionManager.get().getLineCode();
         final PunchOption punchOption = selectedPunchOption;
-        final String shiftName = punchOption != null ? punchOption.label : "";
 
         List<PunchRecord> allPunches = DatabaseHelper.get(requireContext())
                 .getPunchRecordsByDate(date, lineCode);
@@ -379,10 +378,10 @@ public class RecordsFragment extends Fragment {
         for (PunchRecord record : allPunches) {
             if (punchOption != null) {
                 if (punchOption.freePunch) {
-                    if (!PUNCH_TYPE_FREE.equals(record.punchType)) {
+                    if (record.clockIndex != 0 && !PUNCH_TYPE_FREE.equals(record.punchType)) {
                         continue;
                     }
-                } else if (!shiftName.equals(record.shiftName)) {
+                } else if (record.clockIndex != punchOption.clockIndex) {
                     continue;
                 }
             }

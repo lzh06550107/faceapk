@@ -170,6 +170,7 @@ public class LoginActivity extends AppCompatActivity {
             SessionManager.get().saveTeamBindingName(configData.teamBindingName);
         }
         SessionManager.get().saveCurrentTeamTimeRanges(resolveTeamTimeRanges(configData));
+        SessionManager.get().saveCheckCount(configData.checkCount);
         if (!configData.account.isEmpty()) {
             SessionManager.get().saveAccount(configData.account);
         }

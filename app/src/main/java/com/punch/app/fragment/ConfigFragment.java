@@ -35,6 +35,7 @@ import com.punch.app.activation.ActivationManager;
 import com.punch.app.db.DatabaseHelper;
 import com.punch.app.network.ApiResult;
 import com.punch.app.network.ApiService;
+import com.punch.app.network.InteractionLogger;
 import com.punch.app.network.dto.DeviceDto;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncService;
@@ -92,10 +93,12 @@ public class ConfigFragment extends Fragment {
                 updateDownloadId = -1L;
                 updateInstalling = false;
                 updateUpdateButtonState();
-                Toast.makeText(context, "更新包下载状态未知", Toast.LENGTH_SHORT).show();
+                logUpdate("Update package status unknown", "downloadId=" + downloadId);
+                Toast.makeText(context, "Update package status unknown", Toast.LENGTH_SHORT).show();
                 return;
             }
             if (statusInfo.status == DownloadManager.STATUS_SUCCESSFUL) {
+                logUpdate("Update package downloaded", "downloadId=" + downloadId);
                 installDownloadedApk(downloadId);
                 return;
             }
@@ -103,6 +106,12 @@ public class ConfigFragment extends Fragment {
                 updateDownloadId = -1L;
                 updateInstalling = false;
                 updateUpdateButtonState();
+                logUpdateFailure(
+                        "Update download failed",
+                        "downloadId=" + downloadId
+                                + "\nreason=" + statusInfo.reason
+                                + "\nmessage=" + buildDownloadFailureMessage(statusInfo.reason)
+                );
                 Toast.makeText(context, buildDownloadFailureMessage(statusInfo.reason), Toast.LENGTH_LONG).show();
             }
         }
@@ -556,32 +565,36 @@ public class ConfigFragment extends Fragment {
             return 0;
         }
     }
-
     private void startUpdateDownload() {
         if (!isAdded()) {
             return;
         }
         if (isUpdateReadyToInstall()) {
+            logUpdate("检测到更新包已下载", "downloadId=" + updateDownloadId);
             installDownloadedApk(updateDownloadId);
             return;
         }
         if (isUpdateDownloadRunning()) {
+            logUpdate("更新包正在下载", "downloadId=" + updateDownloadId);
             Toast.makeText(requireContext(), "更新包正在下载", Toast.LENGTH_SHORT).show();
             updateUpdateButtonState();
             return;
         }
         String apkUrl = SessionManager.get().getUpdateApkUrl();
         if (apkUrl == null || apkUrl.trim().isEmpty()) {
+            logUpdateFailure("未获取到更新地址", "");
             Toast.makeText(requireContext(), "未获取到更新地址", Toast.LENGTH_SHORT).show();
             return;
         }
         DownloadManager downloadManager = (DownloadManager) requireContext().getSystemService(Context.DOWNLOAD_SERVICE);
         if (downloadManager == null) {
+            logUpdateFailure("系统下载服务不可用", "");
             Toast.makeText(requireContext(), "系统下载服务不可用", Toast.LENGTH_SHORT).show();
             return;
         }
         File downloadDir = requireContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (downloadDir == null) {
+            logUpdateFailure("下载目录不可用", "");
             Toast.makeText(requireContext(), "下载目录不可用", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -592,7 +605,7 @@ public class ConfigFragment extends Fragment {
 
         DownloadManager.Request request = new DownloadManager.Request(Uri.parse(apkUrl.trim()))
                 .setTitle("faceapk 更新")
-                .setDescription("正在下载最新安装包")
+                .setDescription("正在下载更新安装包")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setMimeType("application/vnd.android.package-archive")
                 .setDestinationUri(Uri.fromFile(apkFile))
@@ -601,6 +614,12 @@ public class ConfigFragment extends Fragment {
 
         updateDownloadId = downloadManager.enqueue(request);
         updateInstalling = false;
+        logUpdate(
+                "开始下载更新包",
+                "downloadId=" + updateDownloadId
+                        + "\napkUrl=" + apkUrl.trim()
+                        + "\npath=" + apkFile.getAbsolutePath()
+        );
         updateUpdateButtonState();
         Toast.makeText(requireContext(), "开始下载更新包", Toast.LENGTH_SHORT).show();
     }
@@ -613,6 +632,7 @@ public class ConfigFragment extends Fragment {
         updateUpdateButtonState();
         DownloadManager downloadManager = (DownloadManager) requireContext().getSystemService(Context.DOWNLOAD_SERVICE);
         if (downloadManager == null) {
+            logUpdateFailure("系统下载服务不可用", "downloadId=" + downloadId);
             updateInstalling = false;
             updateUpdateButtonState();
             return;
@@ -621,6 +641,7 @@ public class ConfigFragment extends Fragment {
         if (apkUri == null) {
             File apkFile = new File(requireContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "faceapk-update.apk");
             if (!apkFile.exists()) {
+                logUpdateFailure("更新包不存在", "downloadId=" + downloadId);
                 Toast.makeText(requireContext(), "更新安装包不存在", Toast.LENGTH_SHORT).show();
                 updateInstalling = false;
                 updateDownloadId = -1L;
@@ -633,20 +654,22 @@ public class ConfigFragment extends Fragment {
                     apkFile
             );
         }
+        logUpdate("开始安装更新包", "downloadId=" + downloadId + "\nuri=" + apkUri);
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
+            logUpdate("启动安装界面", "downloadId=" + downloadId + "\nuri=" + apkUri);
             startActivity(intent);
         } catch (Exception e) {
+            logUpdateFailure("无法启动安装程序", "downloadId=" + downloadId + "\nerror=" + e.getMessage());
             Toast.makeText(requireContext(), "无法启动安装程序", Toast.LENGTH_SHORT).show();
             updateInstalling = false;
             updateDownloadId = -1L;
             updateUpdateButtonState();
         }
     }
-
     private void refreshUpdateDownloadState() {
         if (!isAdded()) {
             return;
@@ -699,7 +722,8 @@ public class ConfigFragment extends Fragment {
             if (cursor != null && cursor.moveToFirst()) {
                 int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
                 int reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON));
-                return new DownloadStatusInfo(status, reason);
+                String localUri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI));
+                return new DownloadStatusInfo(status, reason, localUri);
             }
         } catch (Exception ignored) {
         }
@@ -753,6 +777,26 @@ public class ConfigFragment extends Fragment {
         btnUpdateInstall.setText(UPDATE_BUTTON_IDLE);
     }
 
+    private String emptyFallback(String value) {
+        return (value == null || value.trim().isEmpty()) ? "-" : value;
+    }
+
+    private void logUpdate(String title, String detail) {
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_UPDATE,
+                title,
+                detail == null ? "" : detail
+        );
+    }
+
+    private void logUpdateFailure(String title, String detail) {
+        InteractionLogger.logBusinessFailure(
+                InteractionLogger.GROUP_UPDATE,
+                title,
+                detail == null ? "" : detail
+        );
+    }
+
     private void registerUpdateDownloadReceiver() {
         if (!isAdded() || updateReceiverRegistered) {
             return;
@@ -776,16 +820,11 @@ public class ConfigFragment extends Fragment {
         }
         updateReceiverRegistered = false;
     }
-
-    private String emptyFallback(String value) {
-        return (value == null || value.trim().isEmpty()) ? "-" : value;
-    }
-
     private static final class DownloadStatusInfo {
         private final int status;
         private final int reason;
 
-        private DownloadStatusInfo(int status, int reason) {
+        private DownloadStatusInfo(int status, int reason, @Nullable String localUri) {
             this.status = status;
             this.reason = reason;
         }

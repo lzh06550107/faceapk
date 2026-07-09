@@ -28,6 +28,8 @@ import java.util.concurrent.Executors;
 public class FaceManager {
     private static final String TAG = "FaceManager";
     private static final float MASK_SCORE_THRESHOLD = 0.5f;
+    private static final float SAFE_MATCH_THRESHOLD_FLOOR = 0.75f;
+    private static final float SAFE_MATCH_SCORE_GAP = 0.03f;
     public static final String ERROR_INVALID_FACE_IMAGE = "\u4eba\u8138\u56fe\u7247\u4e0d\u5408\u683c";
     public static final String ERROR_NO_FACE_DETECTED = "\u672a\u68c0\u6d4b\u5230\u4eba\u8138";
     public static final String ERROR_LIVENESS_MODEL_NOT_READY = "\u6d3b\u4f53\u68c0\u6d4b\u6a21\u578b\u672a\u5c31\u7eea";
@@ -36,6 +38,7 @@ public class FaceManager {
     public static final String ERROR_FACE_SEARCH_NOT_READY = "\u4eba\u8138\u641c\u7d22\u6a21\u5757\u672a\u5c31\u7eea";
     public static final String ERROR_MASK_DETECTED = "\u68c0\u6d4b\u5230\u53e3\u7f69\uff0c\u8bf7\u6458\u4e0b\u540e\u91cd\u8bd5";
     public static final String ERROR_NO_MATCHING_FACE = "\u672a\u627e\u5230\u5339\u914d\u4eba\u5458";
+    public static final String ERROR_MATCH_AMBIGUOUS = "\u8bc6\u522b\u7ed3\u679c\u4e0d\u591f\u660e\u786e\uff0c\u8bf7\u91cd\u8bd5";
     public static final String ERROR_FACE_ID_MAPPING_MISSING = "\u4eba\u8138\u7d22\u5f15\u6620\u5c04\u4e22\u5931";
 
     private static FaceManager instance;
@@ -262,7 +265,8 @@ public class FaceManager {
                     inst,
                     faceInfo.landmarks
             );
-            Log.d(TAG, "RGB liveness score=" + score + ", threshold=" + threshold);
+            String livenessDetail = buildLivenessDetail(faceInfo, score, threshold);
+            AppLogger.d(TAG, "RGB liveness check: " + livenessDetail);
             if (score < threshold) {
                 return RecognizeResult.fail(ERROR_LIVENESS_CHECK_FAILED);
             }
@@ -282,23 +286,54 @@ public class FaceManager {
 
     private RecognizeResult doSearch(byte[] feature) {
         FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
-        float threshold = SessionManager.get().getMatchThreshold();
+        float configuredThreshold = SessionManager.get().getMatchThreshold();
+        float effectiveThreshold = Math.max(configuredThreshold, SAFE_MATCH_THRESHOLD_FLOOR);
         List<? extends Feature> results = faceSearch.search(
                 BDFaceSDKCommon.FeatureType.BDFACE_FEATURE_TYPE_LIVE_PHOTO,
-                threshold,
-                1,
+                effectiveThreshold,
+                2,
                 feature
         );
         if (results == null || results.isEmpty()) {
+            AppLogger.d(TAG, "Face search miss: configuredThreshold=" + configuredThreshold
+                    + ", effectiveThreshold=" + effectiveThreshold);
             return RecognizeResult.fail(ERROR_NO_MATCHING_FACE);
         }
 
         Feature best = results.get(0);
+        float bestScore = best.getScore();
+        if (bestScore < effectiveThreshold * 100) {
+            AppLogger.d(TAG, "Face search below threshold: bestScore=" + bestScore
+                    + ", configuredThreshold=" + configuredThreshold
+                    + ", effectiveThreshold=" + effectiveThreshold);
+            return RecognizeResult.fail(ERROR_NO_MATCHING_FACE);
+        }
+
+        float secondScore = 0f;
+        if (results.size() > 1 && results.get(1) != null) {
+            secondScore = results.get(1).getScore();
+        }
+        float scoreGap = bestScore - secondScore;
+        if (secondScore > 0f && scoreGap < SAFE_MATCH_SCORE_GAP) {
+            AppLogger.w(TAG, "Reject ambiguous face match: bestScore=" + bestScore
+                    + ", secondScore=" + secondScore
+                    + ", scoreGap=" + scoreGap
+                    + ", configuredThreshold=" + configuredThreshold
+                    + ", effectiveThreshold=" + effectiveThreshold);
+            return RecognizeResult.fail(ERROR_MATCH_AMBIGUOUS);
+        }
+
         String empId = intToEmpId.get(best.getId());
         if (empId == null) {
             return RecognizeResult.fail(ERROR_FACE_ID_MAPPING_MISSING);
         }
-        return RecognizeResult.ok(empId, best.getScore() * 100f);
+        AppLogger.d(TAG, "Face search matched: empId=" + empId
+                + ", bestScore=" + bestScore
+                + ", secondScore=" + secondScore
+                + ", scoreGap=" + scoreGap
+                + ", configuredThreshold=" + configuredThreshold
+                + ", effectiveThreshold=" + effectiveThreshold);
+        return RecognizeResult.ok(empId, bestScore);
     }
 
     private BDFaceSDKConfig buildSdkConfig() {
@@ -313,6 +348,21 @@ public class FaceManager {
         sdkConfig.isAttribute = false;
         sdkConfig.isBestImage = false;
         return sdkConfig;
+    }
+
+    private String buildLivenessDetail(FaceInfo faceInfo, float score, float threshold) {
+        if (faceInfo == null) {
+            return "score=" + score + ", threshold=" + threshold + ", faceInfo=null";
+        }
+        return "score=" + score
+                + ", threshold=" + threshold
+                + ", faceWidth=" + faceInfo.width
+                + ", faceHeight=" + faceInfo.height
+                + ", yaw=" + faceInfo.yaw
+                + ", roll=" + faceInfo.roll
+                + ", pitch=" + faceInfo.pitch
+                + ", blur=" + faceInfo.bluriness
+                + ", illum=" + faceInfo.illum;
     }
 
 

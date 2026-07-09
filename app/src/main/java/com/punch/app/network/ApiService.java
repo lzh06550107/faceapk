@@ -1,6 +1,7 @@
 package com.punch.app.network;
 
 import android.content.Context;
+import android.util.Base64;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -14,17 +15,22 @@ import com.punch.app.network.dto.EmployeeSyncData;
 import com.punch.app.network.dto.EventResultDto;
 import com.punch.app.network.dto.HeartbeatDto;
 import com.punch.app.network.dto.PunchDto;
+import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
 import com.punch.app.utils.SessionManager;
 
 import java.util.ArrayList;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public final class ApiService {
     private static final int EMPLOYEE_SYNC_PAGE_SIZE = 500;
+    private static final String TAG = "ApiService";
 
     private ApiService() {
     }
@@ -104,7 +110,7 @@ public final class ApiService {
     }
 
     public static ApiResult<PunchDto.PunchPushData> pushPunch(PunchRecord punch) {
-        if (SessionManager.get().getTeamBindingId() <= 0) {
+        if (punch == null || punch.teamBindingId <= 0) {
             return ApiResult.failure(400, "team_binding is missing");
         }
         return parsePunchPush(ApiClient.post(ApiEndpoints.PUNCH, buildPunchBody(punch)));
@@ -251,6 +257,7 @@ public final class ApiService {
         result.lineName = safeString(getString(data, "line_binding_name"));
         result.teamBindingId = valueOrZero(getInt(data, "team_binding"));
         result.teamBindingName = safeString(getString(data, "team_binding_name"));
+        result.checkCount = valueOrZero(getInt(data, "check_count"));
         result.needUpdate = Boolean.TRUE.equals(getBoolean(data, "need_update"));
 
         JsonArray lines = getArray(data, "lines");
@@ -344,8 +351,6 @@ public final class ApiService {
                         getString(item, "cursor")
                 );
                 event.eventType = safeString(getString(item, "event_type"));
-                event.scopeType = safeString(getString(item, "scope_type"));
-                event.scopeValue = safeString(getString(item, "scope_value"));
                 result.events.add(event);
             }
         }
@@ -499,10 +504,35 @@ public final class ApiService {
     private static Map<String, Object> buildPunchBody(PunchRecord punch) {
         Map<String, Object> body = new HashMap<>();
         body.put("numbers", safeString(punch.empId));
-        body.put("team_binding", SessionManager.get().getTeamBindingId());
+        body.put("team_binding", punch.teamBindingId);
         body.put("line_binding_code", safeString(punch.lineCode));
         body.put("snap_time", punch.punchTime);
+        body.put("snap_image", encodeSnapshotBase64(punch.snapImagePath));
+        body.put("match_score", punch.matchScore);
         return body;
+    }
+
+    private static String encodeSnapshotBase64(String snapshotPath) {
+        if (snapshotPath == null || snapshotPath.trim().isEmpty()) {
+            return "";
+        }
+        File file = new File(snapshotPath);
+        if (!file.exists() || !file.isFile()) {
+            AppLogger.w(TAG, "Punch snapshot missing: " + snapshotPath);
+            return "";
+        }
+        try (FileInputStream inputStream = new FileInputStream(file);
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, read);
+            }
+            return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP);
+        } catch (IOException e) {
+            AppLogger.w(TAG, "Encode punch snapshot failed: " + e.getMessage());
+            return "";
+        }
     }
 
     private static String mapDistanceMode(int code) {

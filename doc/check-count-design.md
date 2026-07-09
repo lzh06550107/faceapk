@@ -1,20 +1,19 @@
 # 限制打卡人数设计说明
 
 ## 状态
-
 - 当前仅沉淀设计，不实现代码
-- 待需求进一步明确后再落地
+- 需求口径已基本确认，可作为后续开发基线
 
 ## 背景
 
 `同步设备配置` 接口新增了 `check_count` 字段。
 
-根据 `doc/new-api.md` 的说明：
+业务含义：
 
 - `check_count` 表示限制打卡人数
 - 相同人员重复打卡不重复计数
 
-## 当前确认的业务规则
+## 已确认业务规则
 
 ### 1. 限制维度
 
@@ -25,9 +24,9 @@
 - 班组
 - 班次
 
-可表示为：
+最终限制键：
 
-`日期 + lineCode + teamBindingId + shiftName`
+`punchDate + lineCode + teamBindingId + clockIndex`
 
 ### 2. 日期口径
 
@@ -38,43 +37,94 @@
 - `specialTimeEnabled = false` 时，使用真实打卡时间计算出的日期
 - `specialTimeEnabled = true` 时，使用伪造后的班次锚点时间计算出的日期
 
-也就是“按伪造日期限制”。
+即：按最终落库日期限制。
 
-### 3. 人数口径
+### 3. 班次口径
 
-人数按唯一员工数统计：
+班次维度使用 `clockIndex`，不再使用 `shiftName`。
 
-- 同一员工在相同 `日期 + 线体 + 班组 + 班次` 下重复打卡
-- 不重复占用人数名额
+规则：
+
+- 自由打卡：`clockIndex = 0`
+- 普通班次：使用实际班次索引
+
+说明：
+
+- `shiftName` 仅用于展示
+- `clockIndex` 作为正式统计与限制维度，避免文案变化导致口径漂移
+
+### 4. 人数口径
+
+人数按唯一员工数统计。
 
 建议统计口径：
 
 - `DISTINCT emp_id`
 
-### 4. 自由打卡
+规则：
 
-自由打卡也参与人数限制。
+- 同一员工在相同 `日期 + 线体 + 班组 + 班次` 下重复打卡
+- 不重复占用人数名额
 
-建议视为单独班次维度处理：
+### 5. 自由打卡
 
-- `shiftName = 自由打卡`
+自由打卡参与人数限制。
 
-即自由打卡在相同 `日期 + 线体 + 班组 + 自由打卡` 下单独限流。
+规则：
 
-### 5. 超限处理
+- 自由打卡单独作为一个班次维度
+- 使用 `clockIndex = 0`
+- 不与普通上班/下班班次共享人数名额
 
-当前讨论倾向于：
+### 6. 超限处理
 
-- 达到上限后，直接拦截
+当人数达到上限后：
+
+- 直接拦截
 - 不保存本地打卡记录
 - 不进入同步队列
 - 不上报后端
+- 被拦截的打卡完全无记录
 
-但该点建议在正式实现前再次确认。
+### 7. `check_count` 特殊值
+
+规则：
+
+- `check_count <= 0` 视为“不限制”
+
+### 8. 多设备并发与离线一致性
+
+已接受以下事实：
+
+- 多设备离线/并发场景下
+- 本地限制与后端最终统计可能短时不一致
+
+结论：
+
+- 前端先按本地可见记录做限制
+- 后端如有同口径限制，允许最终结果与前端短时不一致
+
+### 9. 旧数据处理
+
+规则：
+
+- 旧记录全部清空
+- 新记录必须带 `team_binding_id`
+
+结论：
+
+- 不做旧记录兼容统计
+- 限制功能仅面向新版本新数据
+
+### 10. 提示文案
+
+超限时统一提示：
+
+- `当前班次人数已达上限`
 
 ## 推荐实现方案
 
-### 配置解析与存储
+### 1. 配置解析与持久化
 
 需要补充以下能力：
 
@@ -83,17 +133,39 @@
 - `SessionManager.saveCheckCount(int)`
 - `SessionManager.getCheckCount()`
 
-### 本地统计查询
+### 2. 本地数据模型调整
+
+需要补充以下字段：
+
+- `PunchRecord.teamBindingId`
+- `PunchRecord.clockIndex`
+
+数据库表 `punch_records` 需要补充：
+
+- `team_binding_id`
+- `clock_index`
+
+说明：
+
+- `team_binding_id` 用于班组隔离
+- `clock_index` 用于正式班次限制维度
+
+### 3. 本地统计查询
 
 建议在 `DatabaseHelper` 中新增按限制维度统计唯一员工的方法。
 
 建议方法：
 
 ```java
-public List<String> getSignedEmpIds(String date, String lineCode, int teamBindingId, String shiftName)
+public List<String> getSignedEmpIds(
+        String punchDate,
+        String lineCode,
+        int teamBindingId,
+        int clockIndex
+)
 ```
 
-建议 SQL 口径：
+建议 SQL：
 
 ```sql
 SELECT DISTINCT emp_id
@@ -101,27 +173,17 @@ FROM punch_records
 WHERE punch_date = ?
   AND line_code = ?
   AND team_binding_id = ?
-  AND shift_name = ?
+  AND clock_index = ?
 ```
 
-## 对现有数据模型的影响
+### 4. 建议索引
 
-当前 `PunchRecord` / `punch_records` 表中只有：
+为避免离线记录增多后查询变慢，建议增加索引：
 
-- `punch_date`
-- `line_code`
-- `shift_name`
-
-当前缺少：
-
-- `team_binding_id`
-
-因此如果未来要严格按 `日期 + 线体 + 班组 + 班次` 限制，建议补充：
-
-- `PunchRecord.teamBindingId`
-- `punch_records.team_binding_id`
-
-并在打卡落库时保存当前班组 ID。
+```sql
+CREATE INDEX idx_punch_limit
+ON punch_records(punch_date, line_code, team_binding_id, clock_index, emp_id)
+```
 
 ## 推荐拦截时机
 
@@ -133,10 +195,12 @@ WHERE punch_date = ?
 2. 读取当前：
    - `lineCode`
    - `teamBindingId`
-   - `shiftName`
-3. 查询当前组合键下已打卡的唯一员工集合
-4. 判断当前员工是否已在集合中
-5. 如果不在集合中，且人数已达到 `check_count`，则拦截
+   - `clockIndex`
+3. 读取 `checkCount`
+4. 若 `checkCount <= 0`，直接放行
+5. 查询当前组合键下已打卡的唯一员工集合
+6. 判断当前员工是否已在集合中
+7. 如果当前员工不在集合中，且人数已达到 `checkCount`，则拦截
 
 ## 推荐判断逻辑
 
@@ -144,83 +208,66 @@ WHERE punch_date = ?
 
 ```java
 int checkCount = SessionManager.get().getCheckCount();
-if (checkCount > 0) {
-    List<String> signedEmpIds = db.getSignedEmpIds(
-            punchDate,
-            lineCode,
-            teamBindingId,
-            shiftName
-    );
+if (checkCount <= 0) {
+    return;
+}
 
-    boolean alreadyCounted = signedEmpIds.contains(emp.id);
-    if (!alreadyCounted && signedEmpIds.size() >= checkCount) {
-        // 拦截并提示
-        return;
-    }
+List<String> signedEmpIds = db.getSignedEmpIds(
+        punchDate,
+        lineCode,
+        teamBindingId,
+        clockIndex
+);
+
+boolean alreadyCounted = signedEmpIds.contains(emp.id);
+if (!alreadyCounted && signedEmpIds.size() >= checkCount) {
+    showLimitMessage("当前班次人数已达上限");
+    return;
 }
 ```
 
-## 需要补充的提示文案
+## 对现有代码的影响
 
-如果超限被拦截，建议给出明确提示，例如：
+### 1. `PunchFragment`
 
-- `当前班次打卡人数已达上限`
-- `当前班组当前班次打卡人数已达上限（N人）`
+需要补充：
 
-## 当前未决问题
+- 当前打卡对应的 `clockIndex`
+- 当前 `teamBindingId`
+- 保存前人数限制校验
 
-以下问题当前未完全冻结，正式实现前建议再次确认：
+### 2. `PunchRecord`
 
-### 1. 超限是否一定“不落本地”
+需要新增：
 
-当前倾向：
+- `teamBindingId`
+- `clockIndex`
 
-- 不保存
-- 不上传
+### 3. `DatabaseHelper`
 
-但如果后续有“超限但保留审计记录”的需求，方案需要调整。
+需要补充：
 
-### 2. 班次维度是否长期使用 `shiftName`
+- 数据库升级
+- 新增字段
+- 新增唯一员工统计查询方法
+- 可选：新增索引
 
-当前建议先按 `shiftName` 实现，因为现有本地记录已有该字段。
+### 4. `ApiService / DeviceConfig`
 
-但从长期稳定性看，更理想的是：
+需要补充：
 
-- 增加并保存 `clockIndex`
-- 未来按 `clockIndex` 作为班次维度
+- `check_count` 配置解析
+- 本地持久化
 
-原因：
-
-- `shiftName` 是显示字段
-- 可能因文案、格式、国际化而变化
-- `clockIndex` 更稳定
-
-### 3. 历史数据迁移
-
-如果新增 `team_binding_id` 字段，需要考虑：
-
-- 老数据如何回填
-- 老数据在离线记录页中的限制口径是否需要兼容
-
-### 4. 在线/离线一致性
-
-当前建议先限制“本地端可见的打卡记录”。
-
-但如果未来后端也做相同限制，需要确认：
-
-- 本地与后端是否完全同口径
-- 本地离线期间与后端在线统计是否会短时不一致
-
-## 建议的后续实现顺序
-
-需求明确后，建议按下面顺序实现：
+## 推荐实现顺序
 
 1. 配置字段解析与持久化
-2. `PunchRecord` / 数据库增加 `team_binding_id`
-3. `DatabaseHelper` 增加按 `日期 + 线体 + 班组 + 班次` 查询唯一员工的方法
-4. `PunchFragment.doPunch(...)` 中增加拦截逻辑
-5. 增加超限提示 UI
-6. 补单元测试和回归测试
+2. `PunchRecord` / 数据库增加 `team_binding_id`、`clock_index`
+3. 清理旧记录数据
+4. `DatabaseHelper` 增加按 `日期 + 线体 + 班组 + 班次` 查询唯一员工的方法
+5. `PunchFragment.doPunch(...)` 中增加拦截逻辑
+6. 增加超限提示 UI
+7. 补单元测试和回归测试
 
 ## 建议测试用例
 
@@ -242,7 +289,7 @@ if (checkCount > 0) {
 ### 3. 班组隔离
 
 - 同一日期、同一线体、同一班次
-- 班组 1 的人数达到上限
+- 班组 1 人数达到上限
 - 班组 2 仍可继续打卡
 
 ### 4. 班次隔离
@@ -253,8 +300,9 @@ if (checkCount > 0) {
 
 ### 5. 自由打卡参与限制
 
-- `自由打卡` 单独作为一类班次统计
-- 自由打卡达到上限后，新的不同员工自由打卡应被拦截
+- 自由打卡使用 `clockIndex = 0`
+- 自由打卡达到上限后
+- 新的不同员工自由打卡应被拦截
 
 ### 6. 特殊时间模式
 
@@ -262,3 +310,15 @@ if (checkCount > 0) {
 - 使用伪造后的 `punchDate`
 - 限制口径必须与最终记录面板展示日期一致
 
+### 7. 无限制场景
+
+- `check_count = 0`
+- `check_count = -1`
+- 任意人数均允许打卡
+
+### 8. 超限无痕
+
+- 触发超限后
+- 本地记录表无新增
+- 同步队列表无新增
+- 无后端上报

@@ -88,6 +88,17 @@ public class SessionManagerTest {
     }
 
     @Test
+    public void checkCount_shouldDefaultToZeroAndRoundTrip() {
+        assertEquals(0, SessionManager.get().getCheckCount());
+
+        SessionManager.get().saveCheckCount(12);
+        assertEquals(12, SessionManager.get().getCheckCount());
+
+        SessionManager.get().saveCheckCount(-1);
+        assertEquals(0, SessionManager.get().getCheckCount());
+    }
+
+    @Test
     public void saveUpdateInfo_shouldRoundTrip() {
         SessionManager.get().saveUpdateInfo(true, "https://example.com/app.apk", "1.0.0", "2.0.0", "release");
 

@@ -20,6 +20,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okio.Buffer;
 
 public class ApiClient {
     private static final String TAG = "ApiClient";
@@ -158,26 +159,35 @@ public class ApiClient {
     }
 
     private static ApiResponse execute(Request request) {
+        long startedAt = System.currentTimeMillis();
         try (Response response = getClient().newCall(request).execute()) {
             String bodyStr = response.body() != null ? response.body().string() : "{}";
             JsonObject obj = parseJsonObject(bodyStr);
+            int backendCode = extractCode(obj, response.code());
+            String backendMessage = extractMessage(obj);
             if (!response.isSuccessful()) {
-                int code = extractCode(obj, response.code());
-                String message = extractMessage(obj);
+                int code = backendCode;
+                String message = backendMessage;
                 if (message == null || message.trim().isEmpty()) {
                     message = "HTTP " + response.code();
                 }
+                logInteraction(request, response.code(), backendCode, false,
+                        backendMessage, message, bodyStr, startedAt);
                 return new ApiResponse(false, code, message, null);
             }
             if (obj == null) {
+                logInteraction(request, response.code(), backendCode, false,
+                        backendMessage, "Invalid response", bodyStr, startedAt);
                 return new ApiResponse(false, response.code(), "Invalid response", null);
             }
             int code = obj.has("code") ? obj.get("code").getAsInt() : 200;
             String msg = obj.has("msg") ? obj.get("msg").getAsString() : "";
             boolean ok = code == 200 || code == 0;
+            logInteraction(request, response.code(), code, ok, msg, ok ? "" : msg, bodyStr, startedAt);
             return new ApiResponse(ok, code, msg, ok && obj.has("data") ? obj.get("data") : null);
         } catch (IOException e) {
             Log.e(TAG, "Request failed: " + e.getMessage());
+            logInteraction(request, 0, 0, false, "", e.getMessage(), "", startedAt);
             return new ApiResponse(false, -1, e.getMessage(), null);
         }
     }
@@ -263,5 +273,76 @@ public class ApiClient {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private static void logInteraction(Request request,
+                                       int httpStatus,
+                                       int backendCode,
+                                       boolean success,
+                                       String backendMessage,
+                                       String errorMessage,
+                                       String responseBody,
+                                       long startedAt) {
+        InteractionLogStore store = InteractionLogStore.get();
+        if (store == null || request == null) {
+            return;
+        }
+        InteractionLogEntry entry = new InteractionLogEntry();
+        entry.category = InteractionLogger.CATEGORY_NETWORK;
+        entry.timeMillis = startedAt;
+        entry.method = request.method();
+        entry.url = request.url().toString();
+        entry.path = request.url().encodedPath();
+        if (request.url().encodedQuery() != null && !request.url().encodedQuery().isEmpty()) {
+            entry.path += "?" + request.url().encodedQuery();
+        }
+        entry.group = InteractionLogger.resolveNetworkGroup(entry.path);
+        entry.title = InteractionLogger.resolveNetworkTitle(entry.method, entry.path);
+        entry.requestBody = sanitizeLoggedRequestBody(entry.path, bodyToString(request.body()));
+        entry.responseBody = responseBody == null ? "" : responseBody;
+        entry.httpStatus = httpStatus;
+        entry.backendCode = backendCode;
+        entry.success = success;
+        entry.durationMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+        entry.backendMessage = backendMessage == null ? "" : backendMessage;
+        entry.errorMessage = errorMessage == null ? "" : errorMessage;
+        store.append(entry);
+    }
+
+    private static String bodyToString(RequestBody body) {
+        if (body == null) {
+            return "";
+        }
+        try {
+            Buffer buffer = new Buffer();
+            body.writeTo(buffer);
+            return buffer.readUtf8();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String sanitizeLoggedRequestBody(String path, String rawBody) {
+        if (rawBody == null || rawBody.trim().isEmpty()) {
+            return "";
+        }
+        if (!ApiEndpoints.PUNCH.equals(path)) {
+            return rawBody;
+        }
+        JsonObject obj = parseJsonObject(rawBody);
+        if (obj == null) {
+            return rawBody;
+        }
+        if (obj.has("snap_image") && !obj.get("snap_image").isJsonNull()) {
+            String snapImage = "";
+            try {
+                snapImage = obj.get("snap_image").getAsString();
+            } catch (Exception ignored) {
+                snapImage = "";
+            }
+            obj.addProperty("snap_image", "[base64 omitted]");
+            obj.addProperty("snap_image_length", snapImage.length());
+        }
+        return GSON.toJson(obj);
     }
 }

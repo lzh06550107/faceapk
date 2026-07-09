@@ -2,6 +2,7 @@ package com.punch.app.service;
 
 import android.content.Context;
 
+import com.punch.app.network.InteractionLogger;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
 import com.punch.app.utils.SessionManager;
@@ -47,6 +48,11 @@ public final class HeartbeatManager {
         );
         started = true;
         AppLogger.d(TAG, "Heartbeat scheduler started");
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_HEARTBEAT,
+                "心跳调度已启动",
+                "间隔 " + (Constants.HEARTBEAT_INTERVAL_MS / 1000L) + " 秒"
+        );
     }
 
     public void triggerNow() {
@@ -55,6 +61,11 @@ public final class HeartbeatManager {
             return;
         }
         start();
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_HEARTBEAT,
+                "立即触发心跳同步",
+                "由应用主动触发一次心跳检查"
+        );
         SyncCoordinator.get().enqueueHeartbeatCycle(appContext);
     }
 
@@ -65,5 +76,10 @@ public final class HeartbeatManager {
         }
         started = false;
         AppLogger.d(TAG, "Heartbeat scheduler stopped");
+        InteractionLogger.logBusiness(
+                InteractionLogger.GROUP_HEARTBEAT,
+                "心跳调度已停止",
+                "当前不再自动向平台发送心跳"
+        );
     }
 }

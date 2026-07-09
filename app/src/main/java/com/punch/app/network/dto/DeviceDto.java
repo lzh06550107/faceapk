@@ -43,6 +43,7 @@ public final class DeviceDto {
         public String lineName = "";
         public int teamBindingId;
         public String teamBindingName = "";
+        public int checkCount;
         public boolean needUpdate;
         public final List<LineOptionData> lines = new ArrayList<>();
         public final List<TeamOptionData> teams = new ArrayList<>();

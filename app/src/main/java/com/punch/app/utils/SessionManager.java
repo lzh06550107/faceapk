@@ -418,6 +418,14 @@ public class SessionManager {
         }
     }
 
+    public void saveCheckCount(int checkCount) {
+        prefs.edit().putInt(Constants.KEY_CHECK_COUNT, Math.max(0, checkCount)).apply();
+    }
+
+    public int getCheckCount() {
+        return prefs.getInt(Constants.KEY_CHECK_COUNT, 0);
+    }
+
     public void saveUpdateInfo(boolean needUpdate, String apkUrl, String currentVersion, String targetVersion, String versionName) {
         prefs.edit()
                 .putBoolean(Constants.KEY_UPDATE_NEED, needUpdate)

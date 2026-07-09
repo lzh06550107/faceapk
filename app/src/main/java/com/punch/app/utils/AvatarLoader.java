@@ -7,14 +7,18 @@ import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
+import com.bumptech.glide.RequestBuilder;
 import com.bumptech.glide.Glide;
 import com.bumptech.glide.load.DataSource;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.load.engine.GlideException;
 import com.bumptech.glide.load.model.GlideUrl;
 import com.bumptech.glide.load.model.LazyHeaders;
+import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions;
 import com.bumptech.glide.request.RequestListener;
+import com.bumptech.glide.request.RequestOptions;
 import com.bumptech.glide.request.target.Target;
+import com.bumptech.glide.signature.ObjectKey;
 
 import java.io.File;
 import java.util.Locale;
@@ -38,10 +42,11 @@ public final class AvatarLoader {
             return;
         }
 
-        Glide.with(imageView)
+        RequestBuilder<Drawable> requestBuilder = Glide.with(imageView)
                 .load(model)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .circleCrop()
+                .transition(DrawableTransitionOptions.withCrossFade())
                 .listener(new RequestListener<Drawable>() {
                     @Override
                     public boolean onLoadFailed(@Nullable GlideException e,
@@ -64,8 +69,9 @@ public final class AvatarLoader {
                         imageView.setVisibility(ImageView.VISIBLE);
                         return false;
                     }
-                })
-                .into(imageView);
+                });
+        applyModelSignature(requestBuilder, model);
+        requestBuilder.into(imageView);
     }
 
     public static void clear(ImageView imageView) {
@@ -99,6 +105,17 @@ public final class AvatarLoader {
             return buildGlideUrl(baseUrl + source);
         }
         return buildGlideUrl(baseUrl + "/" + source);
+    }
+
+    private static void applyModelSignature(RequestBuilder<Drawable> requestBuilder, Object model) {
+        if (!(model instanceof File)) {
+            return;
+        }
+        File file = (File) model;
+        requestBuilder.apply(new RequestOptions()
+                .signature(new ObjectKey(file.getAbsolutePath()
+                        + "_" + file.lastModified()
+                        + "_" + file.length())));
     }
 
     private static GlideUrl buildGlideUrl(String url) {

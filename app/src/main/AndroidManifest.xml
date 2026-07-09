@@ -58,6 +58,14 @@
             android:lockTaskMode="if_whitelisted"
             android:screenOrientation="portrait"/>
 
+        <activity
+            android:name=".activity.InteractionLogActivity"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".activity.LocalEmployeeDebugActivity"
+            android:screenOrientation="portrait" />
+
         <!-- 鍚庡彴鍚屾 Service -->
         <service
             android:name=".service.SyncService"

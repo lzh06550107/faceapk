@@ -673,8 +673,6 @@ paths:
                           x-apifox-orders:
                             - cursor
                             - event_type
-                            - scope_type
-                            - scope_value
                     x-apifox-orders:
                       - server_time
                       - has_changes
@@ -695,12 +693,8 @@ paths:
                       events:
                         - cursor: evt_00000124
                           event_type: person_changed
-                          scope_type: line
-                          scope_value: LX-A-1
                         - cursor: evt_00000126
                           event_type: config_changed
-                          scope_type: device
-                          scope_value: PDA-2026-0018
                 无变更:
                   summary: 无数据变化
                   value:

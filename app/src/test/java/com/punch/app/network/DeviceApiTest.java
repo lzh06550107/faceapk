@@ -25,14 +25,10 @@ public class DeviceApiTest extends ApiTestSupport {
                         "\"server_time\":1750001002," +
                         "\"has_changes\":true," +
                         "\"events\":[{" +
-                        "\"event_cursor\":\"evt_001\"," +
-                        "\"event_type\":\"person_changed\"," +
-                        "\"scope_type\":\"device\"," +
-                        "\"scope_value\":\"A1B2C3D4E5F60789\"},{" +
+                        "\"cursor\":\"evt_001\"," +
+                        "\"event_type\":\"person_changed\"},{" +
                         "\"cursor\":\"evt_002\"," +
-                        "\"event_type\":\"config_changed\"," +
-                        "\"scope_type\":\"line\"," +
-                        "\"scope_value\":\"LX-A-1\"}]" +
+                        "\"event_type\":\"config_changed\"}]" +
                         "}"
         ));
 
@@ -46,8 +42,6 @@ public class DeviceApiTest extends ApiTestSupport {
         assertEquals("person_changed", result.data.events.get(0).eventType);
         assertEquals("evt_002", result.data.events.get(1).cursor);
         assertEquals("config_changed", result.data.events.get(1).eventType);
-        assertEquals("line", result.data.events.get(1).scopeType);
-        assertEquals("LX-A-1", result.data.events.get(1).scopeValue);
 
         Request request = interceptor.takeRequest();
         assertEquals("/v3/handheld/device/heartbeat", request.url().encodedPath());
@@ -118,18 +112,19 @@ public class DeviceApiTest extends ApiTestSupport {
                         "\"account\":\"admin\"," +
                         "\"password\":\"admin\"," +
                         "\"line_binding_code\":\"PKZ450\"," +
-                        "\"line_binding_name\":\"SMT线1\"," +
+                        "\"line_binding_name\":\"SMT Line\"," +
                         "\"team_binding\":1," +
-                        "\"team_binding_name\":\"班组C\"," +
+                        "\"team_binding_name\":\"Team C\"," +
+                        "\"check_count\":15," +
                         "\"need_update\":true," +
-                        "\"lines\":[{\"code\":\"PKZ450\",\"name\":\"SMT线1\"}]," +
-                        "\"teams\":[{\"id\":\"1\",\"name\":\"班组C\",\"time_ranges\":[\"09:00-22:00\"]}]," +
+                        "\"lines\":[{\"code\":\"PKZ450\",\"name\":\"SMT Line\"}]," +
+                        "\"teams\":[{\"id\":\"1\",\"name\":\"Team C\",\"time_ranges\":[\"09:00-22:00\"]}]," +
                         "\"update\":{" +
                         "\"need_update\":true," +
                         "\"apk_url\":\"http://192.168.1.180/storage/uploaded/app.apk\"," +
                         "\"current_version\":\"1.0.0\"," +
                         "\"target_version\":\"2.0.0\"," +
-                        "\"version_name\":\"正式版本\"}," +
+                        "\"version_name\":\"release\"}," +
                         "\"baidu_params\":{" +
                         "\"face_threshold\":68," +
                         "\"match_threshold\":41," +
@@ -147,22 +142,23 @@ public class DeviceApiTest extends ApiTestSupport {
         assertEquals("admin", result.data.account);
         assertEquals("admin", result.data.password);
         assertEquals("PKZ450", result.data.lineCode);
-        assertEquals("SMT线1", result.data.lineName);
+        assertEquals("SMT Line", result.data.lineName);
         assertEquals(1, result.data.teamBindingId);
-        assertEquals("班组C", result.data.teamBindingName);
+        assertEquals("Team C", result.data.teamBindingName);
+        assertEquals(15, result.data.checkCount);
         assertTrue(result.data.needUpdate);
         assertEquals(1, result.data.lines.size());
         assertEquals("PKZ450", result.data.lines.get(0).code);
-        assertEquals("SMT线1", result.data.lines.get(0).name);
+        assertEquals("SMT Line", result.data.lines.get(0).name);
         assertEquals(1, result.data.teams.size());
         assertEquals(1, result.data.teams.get(0).id);
-        assertEquals("班组C", result.data.teams.get(0).name);
+        assertEquals("Team C", result.data.teams.get(0).name);
         assertEquals("09:00-22:00", result.data.teams.get(0).timeRanges.get(0));
         assertTrue(result.data.updateInfo.needUpdate);
         assertEquals("http://192.168.1.180/storage/uploaded/app.apk", result.data.updateInfo.apkUrl);
         assertEquals("1.0.0", result.data.updateInfo.currentVersion);
         assertEquals("2.0.0", result.data.updateInfo.targetVersion);
-        assertEquals("正式版本", result.data.updateInfo.versionName);
+        assertEquals("release", result.data.updateInfo.versionName);
         assertEquals(Float.valueOf(0.41f), result.data.matchThreshold);
         assertEquals(Float.valueOf(0.68f), result.data.faceThreshold);
         assertEquals(Boolean.TRUE, result.data.livenessCheck);
