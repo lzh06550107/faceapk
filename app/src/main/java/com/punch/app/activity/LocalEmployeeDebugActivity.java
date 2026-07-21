@@ -3,6 +3,7 @@ package com.punch.app.activity;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.KeyEvent;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -20,6 +21,8 @@ import com.punch.app.db.DatabaseHelper;
 import com.punch.app.face.FaceFileManager;
 import com.punch.app.face.FaceManager;
 import com.punch.app.model.Employee;
+import com.punch.app.utils.KioskManager;
+import com.punch.app.utils.SessionManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -66,9 +69,39 @@ public class LocalEmployeeDebugActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        KioskManager.enterIfPossible(this);
+    }
+
+    @Override
     protected void onDestroy() {
         executor.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event != null && KioskManager.shouldBlockSystemKey(event.getKeyCode())) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) {
+            KioskManager.restoreAppTaskSoon(this);
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (SessionManager.get().isKioskEnabled()) {
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void loadEmployees() {

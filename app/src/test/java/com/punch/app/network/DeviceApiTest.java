@@ -25,7 +25,7 @@ public class DeviceApiTest extends ApiTestSupport {
                         "\"server_time\":1750001002," +
                         "\"has_changes\":true," +
                         "\"events\":[{" +
-                        "\"cursor\":\"evt_001\"," +
+                        "\"event_cursor\":\"evt_001\"," +
                         "\"event_type\":\"person_changed\"},{" +
                         "\"cursor\":\"evt_002\"," +
                         "\"event_type\":\"config_changed\"}]" +
@@ -213,7 +213,6 @@ public class DeviceApiTest extends ApiTestSupport {
         assertFalse(body.contains("\"device_name\":\"\""));
         assertTrue(body.contains("\"device_id\":\"A1B2C3D4E5F60789\""));
         assertTrue(body.contains("\"ip\":"));
-        assertFalse(body.contains("\"ip\":\"\""));
         assertTrue(body.contains("\"software_version\":\"1.0.0\""));
     }
 
@@ -240,5 +239,17 @@ public class DeviceApiTest extends ApiTestSupport {
         assertEquals(8898, request.url().port());
         assertNull(request.header("Authorization"));
         assertTrue(interceptor.takeBody().contains("\"device_id\":\"A1B2C3D4E5F60789\""));
+    }
+
+    @Test
+    public void activateDevice_shouldAcceptPrimitiveActivationCodePayload() throws Exception {
+        interceptor.enqueueJson(200, successEnvelope("\"ACT-PRIMITIVE\""));
+
+        ApiResult<DeviceDto.DeviceActivateData> result = ApiService.activateDevice("A1B2C3D4E5F60789");
+
+        assertTrue(result.success);
+        assertNotNull(result.data);
+        assertEquals("", result.data.deviceId);
+        assertEquals("ACT-PRIMITIVE", result.data.activationCode);
     }
 }

@@ -58,10 +58,12 @@ import com.punch.app.service.SyncService;
 import com.punch.app.utils.AvatarLoader;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
+import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.PunchSnapshotHelper;
 import com.punch.app.utils.PunchTimeResolver;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.UlidGenerator;
+import com.punch.app.widget.FaceFrameView;
 
 import java.io.File;
 import java.io.IOException;
@@ -82,8 +84,6 @@ import java.util.concurrent.Executors;
 public class PunchFragment extends Fragment implements TextureView.SurfaceTextureListener {
 
     private static final String TAG = "PunchFragment";
-    private static final int REQUEST_CAMERA_PERMISSION = 1001;
-
     // Views
     private View layoutHeader;
     private View layoutControls;
@@ -91,6 +91,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private View layoutCameraLoading;
     private View layoutPunchStatusPanel;
     private TextureView textureView;
+    private FaceFrameView faceFrameView;
     private TextView tvLine, tvTeam, tvStatus, tvResult, btnSwitchCamera, btnSound, btnPunchToggle, btnFullscreen, tvCameraLoading;
     private TextView tvResultAvatarFallback;
     private TextView tvResultAvatarTag;
@@ -126,6 +127,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private long lastRecognitionTimeoutAt = 0;
     private long lastLivenessDebugLogAt = 0;
     private long lastFrameTime = 0;
+    private long previewLayoutSettlingUntil = 0;
     private static final long FRAME_INTERVAL_MS = 600;
     private static final long RESULT_DISPLAY_MS = 3000;
     private static final long RECOGNITION_TIMEOUT_FEEDBACK_COOLDOWN_MS = 1500;
@@ -135,6 +137,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private static final long CAMERA_RELEASE_DELAY_MS = 1800;
     private static final long STATUS_PANEL_AUTO_HIDE_DELAY_MS = 3500;
     private static final long STATUS_PANEL_FADE_DURATION_MS = 500;
+    private static final long PREVIEW_LAYOUT_SETTLE_MS = 300;
+    private static final float FACE_FRAME_MIN_OVERLAP = 0.55f;
     private static final float TTS_SPEECH_RATE_DEFAULT = 1.0f;
     private static final float TTS_SPEECH_RATE_CHINESE = 0.88f;
     private static final int FREE_PUNCH_OPTION_VALUE = 0;
@@ -182,6 +186,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         layoutCameraLoading = view.findViewById(R.id.layout_camera_loading);
         layoutPunchStatusPanel = view.findViewById(R.id.layout_punch_status_panel);
         textureView = view.findViewById(R.id.texture_view);
+        faceFrameView = view.findViewById(R.id.face_frame_view);
         tvLine = view.findViewById(R.id.tv_line);
         tvTeam = view.findViewById(R.id.tv_team);
         tvStatus = view.findViewById(R.id.tv_status);
@@ -250,6 +255,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         textureView.addOnLayoutChangeListener((v, left, top, right, bottom,
                                                oldLeft, oldTop, oldRight, oldBottom) -> {
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                markPreviewLayoutSettling();
                 updatePreviewTransform();
             }
         });
@@ -387,6 +393,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     
     private void setPreviewFullscreen(boolean fullscreen) {
         previewFullscreen = fullscreen;
+        markPreviewLayoutSettling();
         if (layoutHeader != null) {
             layoutHeader.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
         }
@@ -1121,6 +1128,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 if (!punchEnabled || recognizing) {
                     return;
                 }
+                if (isPreviewLayoutSettling()) {
+                    return;
+                }
                 long now = System.currentTimeMillis();
                 if (frameProcessing || (now - lastFrameTime) < FRAME_INTERVAL_MS) return;
                 frameProcessing = true;
@@ -1199,11 +1209,15 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             return;
         }
         if (!hasCameraPermission()) {
-            waitingFirstPreviewFrame = false;
-            hideCameraLoading();
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
-            setStatus("\u8bf7\u5141\u8bb8\u76f8\u673a\u6743\u9650");
-            return;
+            KioskManager.ensureOwnerRuntimePermissions(requireContext());
+            if (!hasCameraPermission()) {
+                waitingFirstPreviewFrame = false;
+                hideCameraLoading();
+                String failureMessage = "\u76f8\u673a\u6743\u9650\u672a\u6388\u4e88\uff0c\u8bf7\u786e\u8ba4 Device Owner \u9759\u9ed8\u6388\u6743";
+                setStatus(failureMessage);
+                playFailFeedback(buildGenericFailureSpeech(failureMessage));
+                return;
+            }
         }
         waitingFirstPreviewFrame = true;
         showCameraLoading("\u76f8\u673a\u51c6\u5907\u4e2d...");
@@ -1235,23 +1249,6 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             }
         }
         return preferred != null ? preferred : fallback;
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_CAMERA_PERMISSION) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                ensureCameraReady();
-            } else {
-                waitingFirstPreviewFrame = false;
-                hideCameraLoading();
-                String failureMessage = "\u76f8\u673a\u6743\u9650\u88ab\u62d2\u7edd";
-                setStatus(failureMessage);
-                playFailFeedback(buildGenericFailureSpeech(failureMessage));
-            }
-        }
     }
 
     @Override
@@ -1290,6 +1287,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                               int mirror,
                               int snapshotRotation) {
         if (recognizing || !punchEnabled) return;
+        if (isPreviewLayoutSettling()) return;
         PunchApplication app = PunchApplication.get();
         if (app != null && !app.isPunchRecognitionReady()) {
             app.preparePunchRecognitionData();
@@ -1335,6 +1333,13 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             return;
         }
 
+        if (!isFaceInsideFrame(result.faceBounds, width, height, angle)) {
+            resetPendingMatch();
+            resetRecognitionAttempt();
+            uiHandler.post(() -> setStatus("\u8bf7\u5c06\u9762\u90e8\u5bf9\u51c6\u8bc6\u522b\u6846"));
+            return;
+        }
+
         resetRecognitionAttempt();
         long matchedAt = System.currentTimeMillis();
         if (!confirmStableMatch(result.empId, matchedAt)) {
@@ -1356,9 +1361,100 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 width,
                 height,
                 snapshotRotation,
-                mirror
+                mirror,
+                getNormalizedFrameCropRect(width, height, angle)
         );
         uiHandler.post(() -> doPunch(emp, result.score, durationMs, clientRecordId, snapshot));
+    }
+
+    private boolean isFaceInsideFrame(@Nullable RectF faceBounds, int width, int height, int angle) {
+        RectF faceViewRect = mapDisplayBufferRectToView(faceBounds, width, height, angle);
+        RectF frameRect = getFaceFrameRect();
+        if (faceViewRect == null || frameRect == null) {
+            return false;
+        }
+        boolean centerInside = frameRect.contains(faceViewRect.centerX(), faceViewRect.centerY());
+        RectF intersection = new RectF(faceViewRect);
+        boolean intersects = intersection.intersect(frameRect);
+        float faceArea = faceViewRect.width() * faceViewRect.height();
+        float overlap = intersects && faceArea > 0f
+                ? (intersection.width() * intersection.height()) / faceArea
+                : 0f;
+        return centerInside && overlap >= FACE_FRAME_MIN_OVERLAP;
+    }
+
+    @Nullable
+    private RectF getNormalizedFrameCropRect(int width, int height, int angle) {
+        RectF frameRect = getFaceFrameRect();
+        if (frameRect == null || textureView == null) {
+            return null;
+        }
+        int viewWidth = textureView.getWidth();
+        int viewHeight = textureView.getHeight();
+        if (viewWidth <= 0 || viewHeight <= 0 || width <= 0 || height <= 0) {
+            return null;
+        }
+        boolean rotated = angle == 90 || angle == 270;
+        float displayWidth = rotated ? height : width;
+        float displayHeight = rotated ? width : height;
+        float scale = Math.max(viewWidth / displayWidth, viewHeight / displayHeight);
+        float offsetX = (viewWidth - displayWidth * scale) / 2f;
+        float offsetY = (viewHeight - displayHeight * scale) / 2f;
+
+        float left = clamp((frameRect.left - offsetX) / scale, 0f, displayWidth);
+        float top = clamp((frameRect.top - offsetY) / scale, 0f, displayHeight);
+        float right = clamp((frameRect.right - offsetX) / scale, left + 1f, displayWidth);
+        float bottom = clamp((frameRect.bottom - offsetY) / scale, top + 1f, displayHeight);
+        return new RectF(
+                left / displayWidth,
+                top / displayHeight,
+                right / displayWidth,
+                bottom / displayHeight
+        );
+    }
+
+    @Nullable
+    private RectF mapDisplayBufferRectToView(@Nullable RectF sourceRect, int width, int height, int angle) {
+        if (sourceRect == null || textureView == null || width <= 0 || height <= 0) {
+            return null;
+        }
+        int viewWidth = textureView.getWidth();
+        int viewHeight = textureView.getHeight();
+        if (viewWidth <= 0 || viewHeight <= 0) {
+            return null;
+        }
+        boolean rotated = angle == 90 || angle == 270;
+        float displayWidth = rotated ? height : width;
+        float displayHeight = rotated ? width : height;
+        float scale = Math.max(viewWidth / displayWidth, viewHeight / displayHeight);
+        float offsetX = (viewWidth - displayWidth * scale) / 2f;
+        float offsetY = (viewHeight - displayHeight * scale) / 2f;
+        return new RectF(
+                sourceRect.left * scale + offsetX,
+                sourceRect.top * scale + offsetY,
+                sourceRect.right * scale + offsetX,
+                sourceRect.bottom * scale + offsetY
+        );
+    }
+
+    @Nullable
+    private RectF getFaceFrameRect() {
+        if (faceFrameView == null || faceFrameView.getWidth() <= 0 || faceFrameView.getHeight() <= 0) {
+            return null;
+        }
+        return faceFrameView.getFrameRect();
+    }
+
+    private float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private void markPreviewLayoutSettling() {
+        previewLayoutSettlingUntil = System.currentTimeMillis() + PREVIEW_LAYOUT_SETTLE_MS;
+    }
+
+    private boolean isPreviewLayoutSettling() {
+        return System.currentTimeMillis() < previewLayoutSettlingUntil;
     }
 
     private void logLivenessFailure(int width, int height, int angle, int mirror, long durationMs) {

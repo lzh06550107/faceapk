@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.view.View;
 
@@ -19,6 +20,16 @@ public class FaceFrameView extends View {
     private boolean scanDown = true;
     
     private final Runnable animRunnable = this::tick;
+
+    public RectF getFrameRect() {
+        float w = getWidth();
+        float h = getHeight();
+        float halfW = w * 0.32f;
+        float halfH = halfW * 1.25f;
+        float cx = w / 2f;
+        float cy = h / 2f;
+        return new RectF(cx - halfW, cy - halfH, cx + halfW, cy + halfH);
+    }
 
     public FaceFrameView(Context ctx) {
         super(ctx);
@@ -46,18 +57,13 @@ public class FaceFrameView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        float w = getWidth();
-        float h = getHeight();
-        float cx = w / 2f;
-        float cy = h / 2f;
-        float halfW = w * 0.32f;
-        float halfH = halfW * 1.25f;
+        RectF frame = getFrameRect();
         float cornerLen = 24f;
 
-        float left = cx - halfW;
-        float top = cy - halfH;
-        float right = cx + halfW;
-        float bottom = cy + halfH;
+        float left = frame.left;
+        float top = frame.top;
+        float right = frame.right;
+        float bottom = frame.bottom;
 
         drawCorner(canvas, left, top, cornerLen, cornerLen);
         drawCorner(canvas, right, top, -cornerLen, cornerLen);

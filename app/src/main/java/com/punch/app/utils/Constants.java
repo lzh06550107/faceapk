@@ -28,6 +28,16 @@ public class Constants {
     public static final String KEY_UPDATE_CURRENT_VERSION = "update_current_version";
     public static final String KEY_UPDATE_TARGET_VERSION = "update_target_version";
     public static final String KEY_UPDATE_VERSION_NAME = "update_version_name";
+    public static final String KEY_UPDATE_INSTALL_PENDING = "update_install_pending";
+    public static final String KEY_UPDATE_INSTALL_APK_PATH = "update_install_apk_path";
+    public static final String KEY_UPDATE_INSTALL_TARGET_VERSION = "update_install_target_version";
+    public static final String KEY_UPDATE_INSTALL_TARGET_VERSION_CODE = "update_install_target_version_code";
+    public static final String KEY_UPDATE_INSTALL_STATUS = "update_install_status";
+    public static final String KEY_UPDATE_INSTALL_MESSAGE = "update_install_message";
+    public static final String KEY_UPDATE_INSTALL_RESULT_CODE = "update_install_result_code";
+    public static final String KEY_UPDATE_INSTALL_STARTED_AT = "update_install_started_at";
+    public static final String KEY_UPDATE_AUTO_LAUNCH_SCHEDULED = "update_auto_launch_scheduled";
+    public static final String KEY_UPDATE_AUTO_LAUNCH_COMPLETED = "update_auto_launch_completed";
     public static final String KEY_EMP_DATA_VERSION = "emp_data_version";
     public static final String KEY_MATCH_THRESHOLD = "match_threshold";
     public static final String KEY_FACE_THRESHOLD = "face_threshold";
@@ -47,6 +57,8 @@ public class Constants {
     public static final String KEY_LAST_HEARTBEAT_TIME = "last_heartbeat_time";
     public static final String KEY_LAST_SERVER_TIME = "last_server_time";
     public static final String KEY_ADVANCED_SETTINGS_PASSWORD = "advanced_settings_password";
+    public static final String KEY_LAST_WIFI_SSID = "last_wifi_ssid";
+    public static final String KEY_LAST_WIFI_PASSWORD = "last_wifi_password";
     public static final String ADVANCED_SETTINGS_PASSWORD = "8899";
 
     public static final int TOKEN_VALID_DAYS = 7;
@@ -66,6 +78,11 @@ public class Constants {
     public static final String STATUS_REST = "rest";
 
     public static final String ACTION_PUNCH_PUSH = "punch_push";
+
+    public static final String UPDATE_INSTALL_STATUS_NONE = "none";
+    public static final String UPDATE_INSTALL_STATUS_PENDING = "pending";
+    public static final String UPDATE_INSTALL_STATUS_SUCCESS = "success";
+    public static final String UPDATE_INSTALL_STATUS_FAILED = "failed";
 
     public static final float DEFAULT_MATCH_THRESHOLD = 0.80f;
     public static final float DEFAULT_FACE_THRESHOLD = 0.80f;

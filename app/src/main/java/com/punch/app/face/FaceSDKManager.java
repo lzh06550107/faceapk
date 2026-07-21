@@ -52,6 +52,13 @@ public class FaceSDKManager {
             "face-sdk-models/silent_live/liveness_rgb-customized-pa-DCQsdk80.model.float32-1.1.82.1";
     private static final String LIVE_NIR_MODEL =
             "face-sdk-models/silent_live/liveness_nir-customized-pa-DCQ_80.model.float32-1.1.78.1";
+
+    private static final String LIVE_VIS_2DMASK_MODEL =
+            "face-sdk-models/silent_live/liveness_rgb-customized-pa-model_freeze_2dmask_20211210_sdk_224_epoch7.model.float32-1.1.80.1";
+    private static final String LIVE_VIS_HAND_MODEL =
+            "face-sdk-models/silent_live/liveness_rgb-customized-pa-hand_sdk_224.model.float32-1.1.69.1";
+    private static final String LIVE_VIS_REFLECTION_MODEL =
+            "face-sdk-models/silent_live/liveness_rgb-customized-pa-reflection.model.float32-1.1.81.1";
     private static final String LIVE_DEPTH_MODEL =
             "face-sdk-models/silent_live/liveness_depth-customized-pa-paddle_60.model.float32-1.1.13.2";
     private static final String MOUTH_MASK_MODEL =
@@ -431,11 +438,11 @@ public class FaceSDKManager {
         faceLive.initModel(
                 context,
                 LIVE_VIS_MODEL,
-                "",
-                "",
-                "",
-                LIVE_NIR_MODEL,
-                LIVE_DEPTH_MODEL,
+                LIVE_VIS_2DMASK_MODEL,
+                LIVE_VIS_HAND_MODEL,
+                LIVE_VIS_REFLECTION_MODEL,
+                resolveNirLiveModelPath(),
+                resolveDepthLiveModelPath(),
                 new Callback() {
                     @Override
                     public void onResponse(int code, String response) {
@@ -454,6 +461,18 @@ public class FaceSDKManager {
                     }
                 }
         );
+    }
+
+    private String resolveDepthLiveModelPath() {
+        // Current handheld integration has no depth/structured-light camera input path,
+        // so the depth liveness model should stay disabled.
+        return "";
+    }
+
+    private String resolveNirLiveModelPath() {
+        // Current handheld integration has no NIR camera input path,
+        // so the NIR liveness model should stay disabled.
+        return "";
     }
 
     private void handleInitCallback(

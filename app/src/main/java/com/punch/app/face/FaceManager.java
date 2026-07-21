@@ -3,6 +3,7 @@ package com.punch.app.face;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.RectF;
 import android.util.Log;
 
 import com.baidu.idl.main.facesdk.FaceInfo;
@@ -200,7 +201,7 @@ public class FaceManager {
             FaceSDKManager.getInstance().getFacePersonFeature()
                     .feature(BDFaceSDKCommon.FeatureType.BDFACE_FEATURE_TYPE_LIVE_PHOTO,
                             inst, faceInfos[0].landmarks, feature);
-            return doSearch(feature);
+            return doSearch(feature, faceInfos[0]);
         } finally {
             inst.destory();
         }
@@ -245,7 +246,7 @@ public class FaceManager {
             FaceSDKManager.getInstance().getFacePersonFeature()
                     .feature(BDFaceSDKCommon.FeatureType.BDFACE_FEATURE_TYPE_LIVE_PHOTO,
                             inst, faceInfos[0].landmarks, feature);
-            return doSearch(feature);
+            return doSearch(feature, faceInfos[0]);
         } finally {
             inst.destory();
         }
@@ -284,7 +285,7 @@ public class FaceManager {
         return null;
     }
 
-    private RecognizeResult doSearch(byte[] feature) {
+    private RecognizeResult doSearch(byte[] feature, FaceInfo faceInfo) {
         FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
         float configuredThreshold = SessionManager.get().getMatchThreshold();
         float effectiveThreshold = Math.max(configuredThreshold, SAFE_MATCH_THRESHOLD_FLOOR);
@@ -333,7 +334,21 @@ public class FaceManager {
                 + ", scoreGap=" + scoreGap
                 + ", configuredThreshold=" + configuredThreshold
                 + ", effectiveThreshold=" + effectiveThreshold);
-        return RecognizeResult.ok(empId, bestScore);
+        return RecognizeResult.ok(empId, bestScore, buildFaceBounds(faceInfo));
+    }
+
+    private RectF buildFaceBounds(FaceInfo faceInfo) {
+        if (faceInfo == null || faceInfo.width <= 0 || faceInfo.height <= 0) {
+            return null;
+        }
+        float halfWidth = faceInfo.width / 2f;
+        float halfHeight = faceInfo.height / 2f;
+        return new RectF(
+                faceInfo.centerX - halfWidth,
+                faceInfo.centerY - halfHeight,
+                faceInfo.centerX + halfWidth,
+                faceInfo.centerY + halfHeight
+        );
     }
 
     private BDFaceSDKConfig buildSdkConfig() {
@@ -430,20 +445,26 @@ public class FaceManager {
         public final String empId;
         public final float score;
         public final String errorMsg;
+        public final RectF faceBounds;
 
-        private RecognizeResult(boolean matched, String empId, float score, String errorMsg) {
+        private RecognizeResult(boolean matched, String empId, float score, String errorMsg, RectF faceBounds) {
             this.matched = matched;
             this.empId = empId;
             this.score = score;
             this.errorMsg = errorMsg;
+            this.faceBounds = faceBounds;
         }
 
         public static RecognizeResult ok(String empId, float score) {
-            return new RecognizeResult(true, empId, score, null);
+            return ok(empId, score, null);
+        }
+
+        public static RecognizeResult ok(String empId, float score, RectF faceBounds) {
+            return new RecognizeResult(true, empId, score, null, faceBounds);
         }
 
         public static RecognizeResult fail(String errorMsg) {
-            return new RecognizeResult(false, null, 0, errorMsg);
+            return new RecognizeResult(false, null, 0, errorMsg, null);
         }
     }
 

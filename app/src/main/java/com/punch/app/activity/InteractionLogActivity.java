@@ -4,6 +4,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.View;
 import android.widget.RadioGroup;
 import android.widget.TextView;
@@ -20,7 +21,9 @@ import com.punch.app.adapter.InteractionLogAdapter;
 import com.punch.app.network.InteractionLogEntry;
 import com.punch.app.network.InteractionLogStore;
 import com.punch.app.network.InteractionLogger;
+import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.LogDisplayFormatter;
+import com.punch.app.utils.SessionManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,6 +70,12 @@ public class InteractionLogActivity extends AppCompatActivity implements Interac
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        KioskManager.enterIfPossible(this);
+    }
+
+    @Override
     protected void onStop() {
         InteractionLogStore store = InteractionLogStore.get();
         if (store != null) {
@@ -78,6 +87,30 @@ public class InteractionLogActivity extends AppCompatActivity implements Interac
     @Override
     public void onLogsChanged() {
         renderLogs();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event != null && KioskManager.shouldBlockSystemKey(event.getKeyCode())) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) {
+            KioskManager.restoreAppTaskSoon(this);
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (SessionManager.get().isKioskEnabled()) {
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void renderLogs() {

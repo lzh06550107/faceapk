@@ -1,8 +1,6 @@
 package com.punch.app.network;
 
 import android.content.Context;
-import android.util.Base64;
-
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -27,6 +25,8 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import okio.ByteString;
 
 public final class ApiService {
     private static final int EMPLOYEE_SYNC_PAGE_SIZE = 500;
@@ -528,7 +528,7 @@ public final class ApiService {
             while ((read = inputStream.read(buffer)) != -1) {
                 outputStream.write(buffer, 0, read);
             }
-            return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP);
+            return ByteString.of(outputStream.toByteArray()).base64();
         } catch (IOException e) {
             AppLogger.w(TAG, "Encode punch snapshot failed: " + e.getMessage());
             return "";

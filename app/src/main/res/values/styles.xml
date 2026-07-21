@@ -12,6 +12,14 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
 
+    <style name="KioskHomeTheme" parent="android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+
     <style name="CardStyle">
         <item name="android:background">@color/white</item>
         <item name="android:elevation">4dp</item>

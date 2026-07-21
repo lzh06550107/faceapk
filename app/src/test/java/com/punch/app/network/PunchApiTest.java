@@ -10,6 +10,10 @@ import com.punch.app.utils.SessionManager;
 
 import org.junit.Test;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+
 import okhttp3.Request;
 
 public class PunchApiTest extends ApiTestSupport {
@@ -61,6 +65,41 @@ public class PunchApiTest extends ApiTestSupport {
         assertTrue(body.contains("\"team_binding\":2"));
         assertTrue(body.contains("\"line_binding_code\":\"PKZ450\""));
         assertTrue(body.contains("\"snap_time\":1782424800"));
+    }
+
+    @Test
+    public void pushPunch_shouldIncludeSnapshotAndMatchScoreWhenProvided() throws Exception {
+        SessionManager.get().saveToken("token-abc", 1893456000L);
+        interceptor.enqueueJson(200, successEnvelope(
+                "{" +
+                        "\"record_id\":12345," +
+                        "\"snap_time\":1782424800," +
+                        "\"snap_time_str\":\"08:30:00\"," +
+                        "\"dates\":\"2025-07-02\"," +
+                        "\"attend_report_id\":67890," +
+                        "\"attend_report_table\":\"hzq_attend_report\"" +
+                        "}"
+        ));
+
+        File tempFile = File.createTempFile("punch-snap", ".txt");
+        tempFile.deleteOnExit();
+        Files.write(tempFile.toPath(), "snapshot".getBytes(StandardCharsets.UTF_8));
+
+        PunchRecord punch = new PunchRecord();
+        punch.empId = "pnFNxH";
+        punch.lineCode = "PKZ450";
+        punch.punchTime = 1782424800L;
+        punch.teamBindingId = 2;
+        punch.matchScore = 0.93d;
+        punch.snapImagePath = tempFile.getAbsolutePath();
+
+        ApiResult<PunchDto.PunchPushData> result = ApiService.pushPunch(punch);
+
+        assertTrue(result.success);
+
+        String body = afterSingleRequestBody(ApiEndpoints.PUNCH);
+        assertTrue(body, body.contains("\"snap_image\":\"c25hcHNob3Q"));
+        assertTrue(body, body.contains("\"match_score\":0.93"));
     }
 
     @Test

@@ -97,6 +97,7 @@
             android:layout_height="match_parent" />
 
         <com.punch.app.widget.FaceFrameView
+            android:id="@+id/face_frame_view"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 

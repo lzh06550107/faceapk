@@ -3,11 +3,19 @@
 
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES"/>
+    <uses-permission android:name="android.permission.REORDER_TASKS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
@@ -27,6 +35,7 @@
         <activity
             android:name=".activity.SplashActivity"
             android:exported="true"
+            android:lockTaskMode="if_whitelisted"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:theme="@style/SplashTheme">
@@ -34,6 +43,18 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".activity.KioskHomeActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:finishOnTaskLaunch="true"
+            android:lockTaskMode="if_whitelisted"
+            android:noHistory="true"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.punch.app.kiosk_home"
+            android:theme="@style/KioskHomeTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.HOME"/>
@@ -43,6 +64,7 @@
 
         <activity
             android:name=".activity.LoginActivity"
+            android:launchMode="singleTop"
             android:lockTaskMode="if_whitelisted"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize"/>
@@ -50,20 +72,26 @@
         <activity
             android:name=".activity.MainActivity"
             android:lockTaskMode="if_whitelisted"
+            android:launchMode="singleTop"
             android:screenOrientation="portrait"
             android:keepScreenOn="true"/>
 
         <activity
             android:name=".activity.AdvancedConfigActivity"
             android:lockTaskMode="if_whitelisted"
+            android:launchMode="singleTop"
             android:screenOrientation="portrait"/>
 
         <activity
             android:name=".activity.InteractionLogActivity"
+            android:launchMode="singleTop"
+            android:lockTaskMode="if_whitelisted"
             android:screenOrientation="portrait" />
 
         <activity
             android:name=".activity.LocalEmployeeDebugActivity"
+            android:launchMode="singleTop"
+            android:lockTaskMode="if_whitelisted"
             android:screenOrientation="portrait" />
 
         <!-- 鍚庡彴鍚屾 Service -->
@@ -81,6 +109,14 @@
                 android:resource="@xml/device_admin_receiver" />
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".receiver.UpdateInstallStateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

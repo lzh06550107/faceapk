@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.YuvImage;
 
 import androidx.annotation.Nullable;
@@ -31,6 +32,18 @@ public final class PunchSnapshotHelper {
                                    int height,
                                    int angle,
                                    int mirror) {
+        return capture(context, clientRecordId, nv21, width, height, angle, mirror, null);
+    }
+
+    @Nullable
+    public static Snapshot capture(Context context,
+                                   String clientRecordId,
+                                   byte[] nv21,
+                                   int width,
+                                   int height,
+                                   int angle,
+                                   int mirror,
+                                   @Nullable RectF normalizedCropRect) {
         if (context == null || clientRecordId == null || clientRecordId.trim().isEmpty()
                 || nv21 == null || width <= 0 || height <= 0) {
             return null;
@@ -39,6 +52,7 @@ public final class PunchSnapshotHelper {
         File outputFile = new File(getSnapshotDirectory(context), clientRecordId + ".jpg");
         Bitmap bitmap = null;
         Bitmap transformed = null;
+        Bitmap cropped = null;
         Bitmap scaled = null;
         try {
             YuvImage yuvImage = new YuvImage(nv21, android.graphics.ImageFormat.NV21, width, height, null);
@@ -54,7 +68,15 @@ public final class PunchSnapshotHelper {
             }
 
             transformed = transformBitmap(bitmap, angle, mirror == 1);
-            scaled = scaleBitmapIfNeeded(transformed);
+            Bitmap outputBitmap = transformed;
+            if (normalizedCropRect != null) {
+                cropped = cropBitmap(transformed, normalizedCropRect);
+                if (cropped == null) {
+                    return null;
+                }
+                outputBitmap = cropped;
+            }
+            scaled = scaleBitmapIfNeeded(outputBitmap);
             if (scaled == null) {
                 return null;
             }
@@ -82,15 +104,10 @@ public final class PunchSnapshotHelper {
             deleteSnapshot(outputFile.getAbsolutePath());
             return null;
         } finally {
-            if (scaled != null && !scaled.isRecycled()) {
-                scaled.recycle();
-            }
-            if (transformed != null && transformed != bitmap && !transformed.isRecycled()) {
-                transformed.recycle();
-            }
-            if (bitmap != null && !bitmap.isRecycled()) {
-                bitmap.recycle();
-            }
+            recycleDistinct(scaled);
+            recycleDistinct(cropped, scaled);
+            recycleDistinct(transformed, bitmap, cropped, scaled);
+            recycleDistinct(bitmap, transformed, cropped, scaled);
         }
     }
 
@@ -142,6 +159,23 @@ public final class PunchSnapshotHelper {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
     }
 
+    @Nullable
+    private static Bitmap cropBitmap(Bitmap bitmap, RectF normalizedCropRect) {
+        if (bitmap == null || normalizedCropRect == null) {
+            return bitmap;
+        }
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int left = clamp(Math.round(normalizedCropRect.left * width), 0, width - 1);
+        int top = clamp(Math.round(normalizedCropRect.top * height), 0, height - 1);
+        int right = clamp(Math.round(normalizedCropRect.right * width), left + 1, width);
+        int bottom = clamp(Math.round(normalizedCropRect.bottom * height), top + 1, height);
+        if (left <= 0 && top <= 0 && right >= width && bottom >= height) {
+            return bitmap;
+        }
+        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top);
+    }
+
     private static Bitmap scaleBitmapIfNeeded(Bitmap bitmap) {
         int width = bitmap.getWidth();
         int height = bitmap.getHeight();
@@ -153,6 +187,24 @@ public final class PunchSnapshotHelper {
         int targetWidth = Math.max(1, Math.round(width * scale));
         int targetHeight = Math.max(1, Math.round(height * scale));
         return Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true);
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static void recycleDistinct(@Nullable Bitmap target, Bitmap... others) {
+        if (target == null || target.isRecycled()) {
+            return;
+        }
+        if (others != null) {
+            for (Bitmap other : others) {
+                if (target == other) {
+                    return;
+                }
+            }
+        }
+        target.recycle();
     }
 
     public static final class Snapshot {

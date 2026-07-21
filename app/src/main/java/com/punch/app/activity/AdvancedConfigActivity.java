@@ -1,6 +1,7 @@
 package com.punch.app.activity;
 
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.widget.ImageButton;
 import android.widget.TextView;
 
@@ -9,6 +10,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.punch.app.R;
 import com.punch.app.fragment.AdvancedConfigFragment;
 import com.punch.app.utils.KioskManager;
+import com.punch.app.utils.SessionManager;
 
 public class AdvancedConfigActivity extends AppCompatActivity {
     @Override
@@ -33,5 +35,29 @@ public class AdvancedConfigActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         KioskManager.enterIfPossible(this);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event != null && KioskManager.shouldBlockSystemKey(event.getKeyCode())) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) {
+            KioskManager.restoreAppTaskSoon(this);
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (SessionManager.get().isKioskEnabled()) {
+            return;
+        }
+        super.onBackPressed();
     }
 }

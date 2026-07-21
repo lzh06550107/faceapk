@@ -1,5 +1,6 @@
 package com.punch.app.fragment;
 
+import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -22,6 +23,8 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.core.content.FileProvider;
 import androidx.fragment.app.Fragment;
@@ -39,7 +42,9 @@ import com.punch.app.network.InteractionLogger;
 import com.punch.app.network.dto.DeviceDto;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncService;
+import com.punch.app.utils.Constants;
 import com.punch.app.utils.SessionManager;
+import com.punch.app.utils.UpdateManager;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -77,6 +82,12 @@ public class ConfigFragment extends Fragment {
     private long updateDownloadId = -1L;
     private boolean updateReceiverRegistered = false;
     private boolean updateInstalling = false;
+    private String lastInstallResultMessage = "";
+    private final ActivityResultLauncher<Intent> updateInstallLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.StartActivityForResult(),
+                    result -> handleInstallActivityResult(result.getResultCode(), result.getData())
+            );
 
     private final BroadcastReceiver updateDownloadReceiver = new BroadcastReceiver() {
         @Override
@@ -94,7 +105,7 @@ public class ConfigFragment extends Fragment {
                 updateInstalling = false;
                 updateUpdateButtonState();
                 logUpdate("Update package status unknown", "downloadId=" + downloadId);
-                Toast.makeText(context, "Update package status unknown", Toast.LENGTH_SHORT).show();
+                showUpdateStatus("更新包状态未知，请重新下载");
                 return;
             }
             if (statusInfo.status == DownloadManager.STATUS_SUCCESSFUL) {
@@ -112,7 +123,7 @@ public class ConfigFragment extends Fragment {
                                 + "\nreason=" + statusInfo.reason
                                 + "\nmessage=" + buildDownloadFailureMessage(statusInfo.reason)
                 );
-                Toast.makeText(context, buildDownloadFailureMessage(statusInfo.reason), Toast.LENGTH_LONG).show();
+                showUpdateStatus(buildDownloadFailureMessage(statusInfo.reason));
             }
         }
     };
@@ -157,6 +168,8 @@ public class ConfigFragment extends Fragment {
         super.onResume();
         loadConfig();
         refreshUpdateDownloadState();
+        reconcileUpdateInstallState();
+        showPendingInstallResultIfAny();
     }
 
     @Override
@@ -191,7 +204,11 @@ public class ConfigFragment extends Fragment {
         selectLineBinding(SessionManager.get().getLineCode());
         selectTeamBinding(SessionManager.get().getTeamBindingId());
         tvDeviceId.setText(emptyFallback(SessionManager.get().getDeviceId()));
-        tvUpdateStatus.setText(formatUpdateStatus());
+        if (lastInstallResultMessage != null && !lastInstallResultMessage.trim().isEmpty()) {
+            tvUpdateStatus.setText(lastInstallResultMessage.trim());
+        } else {
+            tvUpdateStatus.setText(formatUpdateStatus());
+        }
         tvAccount.setText(emptyFallback(SessionManager.get().getAccount()));
         updateUpdateButtonState();
 
@@ -576,26 +593,26 @@ public class ConfigFragment extends Fragment {
         }
         if (isUpdateDownloadRunning()) {
             logUpdate("更新包正在下载", "downloadId=" + updateDownloadId);
-            Toast.makeText(requireContext(), "更新包正在下载", Toast.LENGTH_SHORT).show();
+            showUpdateStatus("更新包正在下载，请稍候");
             updateUpdateButtonState();
             return;
         }
         String apkUrl = SessionManager.get().getUpdateApkUrl();
         if (apkUrl == null || apkUrl.trim().isEmpty()) {
             logUpdateFailure("未获取到更新地址", "");
-            Toast.makeText(requireContext(), "未获取到更新地址", Toast.LENGTH_SHORT).show();
+            showUpdateStatus("未获取到更新地址");
             return;
         }
         DownloadManager downloadManager = (DownloadManager) requireContext().getSystemService(Context.DOWNLOAD_SERVICE);
         if (downloadManager == null) {
             logUpdateFailure("系统下载服务不可用", "");
-            Toast.makeText(requireContext(), "系统下载服务不可用", Toast.LENGTH_SHORT).show();
+            showUpdateStatus("系统下载服务不可用");
             return;
         }
         File downloadDir = requireContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (downloadDir == null) {
             logUpdateFailure("下载目录不可用", "");
-            Toast.makeText(requireContext(), "下载目录不可用", Toast.LENGTH_SHORT).show();
+            showUpdateStatus("下载目录不可用");
             return;
         }
         File apkFile = new File(downloadDir, "faceapk-update.apk");
@@ -621,7 +638,7 @@ public class ConfigFragment extends Fragment {
                         + "\npath=" + apkFile.getAbsolutePath()
         );
         updateUpdateButtonState();
-        Toast.makeText(requireContext(), "开始下载更新包", Toast.LENGTH_SHORT).show();
+        showUpdateStatus("开始下载更新包");
     }
 
     private void installDownloadedApk(long downloadId) {
@@ -642,7 +659,7 @@ public class ConfigFragment extends Fragment {
             File apkFile = new File(requireContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "faceapk-update.apk");
             if (!apkFile.exists()) {
                 logUpdateFailure("更新包不存在", "downloadId=" + downloadId);
-                Toast.makeText(requireContext(), "更新安装包不存在", Toast.LENGTH_SHORT).show();
+                showUpdateStatus("更新安装包不存在，请重新下载");
                 updateInstalling = false;
                 updateDownloadId = -1L;
                 updateUpdateButtonState();
@@ -654,19 +671,26 @@ public class ConfigFragment extends Fragment {
                     apkFile
             );
         }
-        logUpdate("开始安装更新包", "downloadId=" + downloadId + "\nuri=" + apkUri);
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try {
-            logUpdate("启动安装界面", "downloadId=" + downloadId + "\nuri=" + apkUri);
-            startActivity(intent);
-        } catch (Exception e) {
-            logUpdateFailure("无法启动安装程序", "downloadId=" + downloadId + "\nerror=" + e.getMessage());
-            Toast.makeText(requireContext(), "无法启动安装程序", Toast.LENGTH_SHORT).show();
+        String apkPath = resolveDownloadedApkPath(downloadId);
+        logUpdate("Start installing update package", "downloadId=" + downloadId + "\nuri=" + apkUri + "\napkPath=" + apkPath);
+        showUpdateStatus("正在安装更新包...");
+        UpdateManager.StartResult startResult = UpdateManager.startInstall(
+                requireActivity(),
+                apkUri,
+                apkPath,
+                SessionManager.get().getUpdateTargetVersion(),
+                updateInstallLauncher
+        );
+        if (!startResult.success) {
+            showUpdateStatus("安装启动失败：" + startResult.message);
             updateInstalling = false;
             updateDownloadId = -1L;
+            updateUpdateButtonState();
+            return;
+        }
+        showUpdateStatus(startResult.deviceOwnerInstall ? "后台安装已提交，请等待安装结果" : "已打开系统安装界面");
+        if (startResult.deviceOwnerInstall) {
+            updateInstalling = false;
             updateUpdateButtonState();
         }
     }
@@ -693,6 +717,62 @@ public class ConfigFragment extends Fragment {
             updateInstalling = false;
         }
         updateUpdateButtonState();
+    }
+
+    private void handleInstallActivityResult(int resultCode, @Nullable Intent data) {
+        UpdateManager.handleSystemInstallerResult(requireContext(), resultCode, data);
+        updateInstalling = false;
+        updateUpdateButtonState();
+    }
+
+    private String resolveDownloadedApkPath(long downloadId) {
+        DownloadStatusInfo statusInfo = queryDownloadStatusInfo(downloadId);
+        if (statusInfo != null && statusInfo.localUri != null && !statusInfo.localUri.trim().isEmpty()) {
+            try {
+                Uri uri = Uri.parse(statusInfo.localUri.trim());
+                if ("file".equalsIgnoreCase(uri.getScheme()) && uri.getPath() != null) {
+                    return uri.getPath();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        File downloadDir = requireContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (downloadDir == null) {
+            return "";
+        }
+        return new File(downloadDir, "faceapk-update.apk").getAbsolutePath();
+    }
+
+    private void reconcileUpdateInstallState() {
+        UpdateManager.reconcileInstallState(requireContext());
+    }
+
+    private void showPendingInstallResultIfAny() {
+        String status = SessionManager.get().getUpdateInstallStatus();
+        if (Constants.UPDATE_INSTALL_STATUS_NONE.equals(status)
+                || Constants.UPDATE_INSTALL_STATUS_PENDING.equals(status)) {
+            return;
+        }
+        String message = SessionManager.get().getUpdateInstallMessage();
+        if (message != null && !message.trim().isEmpty()) {
+            lastInstallResultMessage = "最近安装结果：" + message.trim();
+        } else if (Constants.UPDATE_INSTALL_STATUS_SUCCESS.equals(status)) {
+            lastInstallResultMessage = "最近安装结果：应用更新安装成功";
+        } else {
+            lastInstallResultMessage = "最近安装结果：应用更新安装未完成";
+        }
+        SessionManager.get().clearUpdateInstallState();
+        renderConfig();
+    }
+
+    private void showUpdateStatus(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return;
+        }
+        lastInstallResultMessage = message.trim();
+        if (tvUpdateStatus != null) {
+            tvUpdateStatus.setText(lastInstallResultMessage);
+        }
     }
 
     private boolean isUpdateDownloadRunning() {
@@ -763,6 +843,11 @@ public class ConfigFragment extends Fragment {
             return;
         }
         btnUpdateInstall.setVisibility(View.VISIBLE);
+        if (SessionManager.get().isUpdateInstallPending()) {
+            btnUpdateInstall.setEnabled(false);
+            btnUpdateInstall.setText(UPDATE_BUTTON_INSTALLING);
+            return;
+        }
         if (updateInstalling) {
             btnUpdateInstall.setEnabled(false);
             btnUpdateInstall.setText(UPDATE_BUTTON_INSTALLING);
@@ -823,10 +908,12 @@ public class ConfigFragment extends Fragment {
     private static final class DownloadStatusInfo {
         private final int status;
         private final int reason;
+        private final String localUri;
 
         private DownloadStatusInfo(int status, int reason, @Nullable String localUri) {
             this.status = status;
             this.reason = reason;
+            this.localUri = localUri == null ? "" : localUri;
         }
     }
 

@@ -1,17 +1,21 @@
 package com.punch.app;
 
+import android.app.Activity;
 import android.app.Application;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
 import com.punch.app.activation.ActivationManager;
+import com.punch.app.activity.KioskHomeActivity;
 import com.punch.app.db.DatabaseHelper;
 import com.punch.app.face.FaceManager;
 import com.punch.app.network.InteractionLogStore;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncCoordinator;
 import com.punch.app.utils.AppLogger;
+import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 
 import java.util.ArrayDeque;
@@ -25,6 +29,8 @@ import java.util.concurrent.Executors;
 public class PunchApplication extends Application {
     private static final String TAG = "PunchApplication";
     private static final long FACE_SDK_READY_TIMEOUT_MS = 120_000L;
+    private static final long KIOSK_RESTORE_DELAY_MS = 250L;
+    private static final long KIOSK_FOREGROUND_WATCHDOG_INTERVAL_MS = 150L;
     private static final int MAX_STATUS_HISTORY = 5;
 
     public static final int STATUS_LEVEL_INFO = 0;
@@ -33,6 +39,7 @@ public class PunchApplication extends Application {
     public static final int STATUS_LEVEL_ERROR = 3;
 
     private static PunchApplication instance;
+    private static volatile boolean uiTestModeEnabled;
 
     private volatile boolean faceSdkInitializing;
     private volatile boolean punchDataPreparing;
@@ -40,6 +47,10 @@ public class PunchApplication extends Application {
     private volatile String punchDataStatus = "正在准备打卡数据...";
     private volatile int punchDataStatusLevel = STATUS_LEVEL_PROGRESS;
     private volatile boolean punchStatusAttention;
+    private volatile int resumedNonHomeActivityCount;
+    private volatile long lastNonHomeActivityVisibleAt;
+    private volatile Class<? extends Activity> lastNonHomeActivityClass;
+    private volatile boolean kioskForegroundWatchdogRunning;
 
     private final ExecutorService appExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -51,12 +62,74 @@ public class PunchApplication extends Application {
         return instance;
     }
 
+    public static void setUiTestModeForTest(boolean enabled) {
+        uiTestModeEnabled = enabled;
+    }
+
+    public static boolean isUiTestModeEnabled() {
+        return uiTestModeEnabled;
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
 
+        if (uiTestModeEnabled) {
+            SessionManager.get().init(this);
+            return;
+        }
+
+        registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
+            @Override
+            public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
+            }
+
+            @Override
+            public void onActivityStarted(Activity activity) {
+            }
+
+            @Override
+            public void onActivityResumed(Activity activity) {
+                if (activity instanceof KioskHomeActivity) {
+                    return;
+                }
+                KioskManager.enterIfPossible(activity);
+                startKioskForegroundWatchdog();
+                resumedNonHomeActivityCount += 1;
+                lastNonHomeActivityVisibleAt = System.currentTimeMillis();
+                lastNonHomeActivityClass = activity.getClass();
+            }
+
+            @Override
+            public void onActivityPaused(Activity activity) {
+                if (activity instanceof KioskHomeActivity) {
+                    return;
+                }
+                resumedNonHomeActivityCount = Math.max(0, resumedNonHomeActivityCount - 1);
+                lastNonHomeActivityVisibleAt = System.currentTimeMillis();
+                scheduleKioskTaskRestore();
+            }
+
+            @Override
+            public void onActivityStopped(Activity activity) {
+            }
+
+            @Override
+            public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
+            }
+
+            @Override
+            public void onActivityDestroyed(Activity activity) {
+            }
+        });
+
         SessionManager.get().init(this);
+        if (KioskManager.isDeviceOwner(this)) {
+            SessionManager.get().saveKioskEnabled(true);
+            KioskManager.ensureOwnerKioskPolicies(this);
+            startKioskForegroundWatchdog();
+        }
         InteractionLogStore.init(this);
         DatabaseHelper.get(this);
         ActivationManager.get().ensureDeviceRegistered(this);
@@ -67,6 +140,47 @@ public class PunchApplication extends Application {
             startSyncService();
         }
     }
+
+    public boolean wasNonHomeActivityRecentlyVisible(long windowMs) {
+        if (resumedNonHomeActivityCount > 0) {
+            return true;
+        }
+        long lastVisibleAt = lastNonHomeActivityVisibleAt;
+        return lastVisibleAt > 0L && System.currentTimeMillis() - lastVisibleAt <= windowMs;
+    }
+
+    public Class<? extends Activity> getLastNonHomeActivityClass() {
+        return lastNonHomeActivityClass;
+    }
+
+    private void scheduleKioskTaskRestore() {
+        mainHandler.postDelayed(() -> {
+            if (!SessionManager.get().isKioskEnabled() || resumedNonHomeActivityCount > 0) {
+                return;
+            }
+            KioskManager.bringExistingAppTaskToFront(this, -1);
+        }, KIOSK_RESTORE_DELAY_MS);
+    }
+
+    private void startKioskForegroundWatchdog() {
+        if (kioskForegroundWatchdogRunning) {
+            return;
+        }
+        kioskForegroundWatchdogRunning = true;
+        mainHandler.post(kioskForegroundWatchdogRunnable);
+    }
+
+    private final Runnable kioskForegroundWatchdogRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!SessionManager.get().isKioskEnabled() || !KioskManager.isDeviceOwner(PunchApplication.this)) {
+                kioskForegroundWatchdogRunning = false;
+                return;
+            }
+            KioskManager.bringExistingAppTaskToFrontQuietly(PunchApplication.this, -1);
+            mainHandler.postDelayed(this, KIOSK_FOREGROUND_WATCHDOG_INTERVAL_MS);
+        }
+    };
 
     public void initFaceSDK() {
         if (!SessionManager.get().isTokenValid()) {

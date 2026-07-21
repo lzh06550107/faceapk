@@ -34,7 +34,7 @@ abstract class ApiTestSupport {
     public void setUpApiTestSupport() throws Exception {
         setSessionPreferences(new MemorySharedPreferences(), new MemorySharedPreferences());
         SessionManager.get().clearAll();
-        SessionManager.get().saveDeviceId(TEST_DEVICE_ID);
+        putStoredDeviceId(TEST_DEVICE_ID);
 
         interceptor = new RecordingInterceptor();
         OkHttpClient client = new OkHttpClient.Builder()
@@ -74,6 +74,13 @@ abstract class ApiTestSupport {
         Field securePrefsField = SessionManager.class.getDeclaredField("securePrefs");
         securePrefsField.setAccessible(true);
         securePrefsField.set(SessionManager.get(), securePrefs);
+    }
+
+    private void putStoredDeviceId(String deviceId) throws Exception {
+        Field prefsField = SessionManager.class.getDeclaredField("prefs");
+        prefsField.setAccessible(true);
+        SharedPreferences prefs = (SharedPreferences) prefsField.get(SessionManager.get());
+        prefs.edit().putString("device_id", deviceId).apply();
     }
 
     protected static final class RecordingInterceptor implements Interceptor {

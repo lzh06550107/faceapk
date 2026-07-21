@@ -1,0 +1,20 @@
+* text=auto
+
+*.java text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.gradle text eol=lf
+*.xml text eol=lf
+*.properties text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.aar binary
+*.jar binary
+*.so binary
+*.model* binary

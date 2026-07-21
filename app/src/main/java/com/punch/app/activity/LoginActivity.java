@@ -3,6 +3,7 @@ package com.punch.app.activity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.view.KeyEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -17,24 +18,29 @@ import com.punch.app.network.ApiResult;
 import com.punch.app.network.ApiService;
 import com.punch.app.network.dto.AuthDto;
 import com.punch.app.network.dto.DeviceDto;
+import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.service.SyncService;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
+import com.punch.app.utils.WifiConfigDialogHelper;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.List;
 
 public class LoginActivity extends AppCompatActivity {
+    private static final long UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS = 1_500L;
     private static final String DEFAULT_ACCOUNT = "admin";
     private static final String DEFAULT_PASSWORD = "a123456!";
 
     private EditText etAccount;
     private EditText etPassword;
     private Button btnLogin;
+    private Button btnConfigureWifi;
     private ProgressBar progress;
     private TextView tvError;
     private TextView tvProgressStatus;
+    private WifiConfigDialogHelper wifiConfigDialogHelper;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -46,21 +52,75 @@ public class LoginActivity extends AppCompatActivity {
         etAccount = findViewById(R.id.et_account);
         etPassword = findViewById(R.id.et_password);
         btnLogin = findViewById(R.id.btn_login);
+        btnConfigureWifi = findViewById(R.id.btn_configure_wifi);
         progress = findViewById(R.id.progress);
         tvError = findViewById(R.id.tv_error);
         tvProgressStatus = findViewById(R.id.tv_progress_status);
+        wifiConfigDialogHelper = new WifiConfigDialogHelper(this);
 
         String savedAccount = SessionManager.get().getAccount();
         String savedPassword = SessionManager.get().getPassword();
         etAccount.setText(savedAccount.isEmpty() ? DEFAULT_ACCOUNT : savedAccount);
         etPassword.setText(savedPassword.isEmpty() ? DEFAULT_PASSWORD : savedPassword);
         btnLogin.setOnClickListener(v -> doLogin());
+        btnConfigureWifi.setOnClickListener(v -> wifiConfigDialogHelper.showConfigDialog());
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         KioskManager.enterIfPossible(this);
+        wifiConfigDialogHelper.onResume();
+        refreshDeviceIdFromPreferredSource();
+        scheduleStableUpdateAutoLaunchCancel();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        wifiConfigDialogHelper.onDestroy();
+    }
+
+    private void scheduleStableUpdateAutoLaunchCancel() {
+        btnLogin.postDelayed(() -> {
+            if (isFinishing()) {
+                return;
+            }
+            if (isDestroyed()) {
+                return;
+            }
+            if (!KioskManager.isInLockedTaskMode(this)) {
+                return;
+            }
+            UpdateInstallStateReceiver.cancelScheduledAutoLaunch(this);
+        }, UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event != null && KioskManager.shouldBlockSystemKey(event.getKeyCode())) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) {
+            KioskManager.restoreAppTaskSoon(this);
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (SessionManager.get().isKioskEnabled()) {
+            return;
+        }
+        super.onBackPressed();
+    }
+    private void refreshDeviceIdFromPreferredSource() {
+        SessionManager.get().getDeviceId();
     }
 
     private void doLogin() {

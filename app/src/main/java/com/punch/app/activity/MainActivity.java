@@ -7,6 +7,7 @@ import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.View;
 import android.widget.TextView;
 
@@ -24,12 +25,15 @@ import com.punch.app.fragment.RecordsFragment;
 import com.punch.app.network.ApiResult;
 import com.punch.app.network.ApiService;
 import com.punch.app.network.dto.AuthDto;
+import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncService;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 
 public class MainActivity extends AppCompatActivity {
+    private static final long UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS = 1_500L;
+
     private TextView tvBanner;
     private BottomNavigationView bottomNav;
 
@@ -95,6 +99,46 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         KioskManager.enterIfPossible(this);
+        scheduleStableUpdateAutoLaunchCancel();
+    }
+
+    private void scheduleStableUpdateAutoLaunchCancel() {
+        bottomNav.postDelayed(() -> {
+            if (isFinishing()) {
+                return;
+            }
+            if (isDestroyed()) {
+                return;
+            }
+            if (!KioskManager.isInLockedTaskMode(this)) {
+                return;
+            }
+            UpdateInstallStateReceiver.cancelScheduledAutoLaunch(this);
+        }, UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event != null && KioskManager.shouldBlockSystemKey(event.getKeyCode())) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) {
+            KioskManager.restoreAppTaskSoon(this);
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (SessionManager.get().isKioskEnabled()) {
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void showFragment(Fragment fragment) {

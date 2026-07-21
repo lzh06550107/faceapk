@@ -21,15 +21,16 @@ import java.util.Collections;
 import java.util.List;
 import java.security.MessageDigest;
 import java.util.Locale;
-import java.util.UUID;
 import java.util.regex.Pattern;
 
 public class SessionManager {
     private static final String TAG = "SessionManager";
     private static final int DEVICE_ID_LENGTH = 16;
-    private static final Pattern MODERN_DEVICE_ID_PATTERN = Pattern.compile("^[0-9A-F]{16}$");
+    private static final int MAX_DEVICE_ID_LENGTH = 64;
+    private static final Pattern DEVICE_ID_PATTERN = Pattern.compile("^[0-9A-Za-z_-]{4,64}$");
 
     private static SessionManager instance;
+    private static String resolvedDeviceIdForTest;
 
     private Context appContext;
     private SharedPreferences prefs;
@@ -111,10 +112,16 @@ public class SessionManager {
 
     public String getOrCreateDeviceId() {
         String id = prefs.getString(Constants.KEY_DEVICE_ID, null);
+        String preferredId = resolveDeviceId();
+        if (!preferredId.isEmpty() && !preferredId.equals(id)) {
+            id = replaceDeviceId(preferredId, true);
+        } else if (!preferredId.isEmpty()) {
+            id = preferredId;
+        }
         if (id == null || id.isEmpty()) {
             id = resolveDeviceId();
             prefs.edit().putString(Constants.KEY_DEVICE_ID, id).apply();
-        } else if (!isModernDeviceId(id)) {
+        } else if (!isValidDeviceId(id)) {
             id = rebuildDeviceId();
         }
         return id;
@@ -125,21 +132,16 @@ public class SessionManager {
     }
 
     public void saveDeviceId(String deviceId) {
-        if (deviceId == null || deviceId.trim().isEmpty()) {
+        String safeDeviceId = resolveDeviceId();
+        if (safeDeviceId.isEmpty()) {
             return;
         }
-        prefs.edit().putString(Constants.KEY_DEVICE_ID, deviceId.trim()).apply();
+        prefs.edit().putString(Constants.KEY_DEVICE_ID, safeDeviceId).apply();
     }
 
     public String rebuildDeviceId() {
         String id = resolveDeviceId();
-        prefs.edit()
-                .putString(Constants.KEY_DEVICE_ID, id)
-                .putBoolean(Constants.KEY_DEVICE_REGISTERED, false)
-                .putBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, false)
-                .apply();
-        clearToken();
-        return id;
+        return replaceDeviceId(id, true);
     }
 
     public boolean isDeviceRegistered() {
@@ -231,6 +233,24 @@ public class SessionManager {
 
     public String getPassword() {
         return securePrefs.getString(Constants.KEY_ACCOUNT_PASSWORD, "");
+    }
+
+    public void saveLastWifiConfig(String ssid, String password) {
+        String safeSsid = ssid == null ? "" : ssid.trim();
+        prefs.edit()
+                .putString(Constants.KEY_LAST_WIFI_SSID, safeSsid)
+                .apply();
+        securePrefs.edit()
+                .putString(Constants.KEY_LAST_WIFI_PASSWORD, password == null ? "" : password)
+                .apply();
+    }
+
+    public String getLastWifiSsid() {
+        return prefs.getString(Constants.KEY_LAST_WIFI_SSID, "");
+    }
+
+    public String getLastWifiPassword() {
+        return securePrefs.getString(Constants.KEY_LAST_WIFI_PASSWORD, "");
     }
 
     public void saveLineBinding(String code, String name) {
@@ -456,6 +476,106 @@ public class SessionManager {
         return prefs.getString(Constants.KEY_UPDATE_VERSION_NAME, "");
     }
 
+    public void markUpdateInstallStarted(String apkPath, String targetVersion) {
+        markUpdateInstallStarted(apkPath, targetVersion, 0L);
+    }
+
+    public void markUpdateInstallStarted(String apkPath, String targetVersion, long targetVersionCode) {
+        prefs.edit()
+                .putBoolean(Constants.KEY_UPDATE_INSTALL_PENDING, true)
+                .putString(Constants.KEY_UPDATE_INSTALL_APK_PATH, apkPath == null ? "" : apkPath)
+                .putString(Constants.KEY_UPDATE_INSTALL_TARGET_VERSION, targetVersion == null ? "" : targetVersion)
+                .putLong(Constants.KEY_UPDATE_INSTALL_TARGET_VERSION_CODE, Math.max(0L, targetVersionCode))
+                .putString(Constants.KEY_UPDATE_INSTALL_STATUS, Constants.UPDATE_INSTALL_STATUS_PENDING)
+                .putString(Constants.KEY_UPDATE_INSTALL_MESSAGE, "")
+                .putInt(Constants.KEY_UPDATE_INSTALL_RESULT_CODE, Integer.MIN_VALUE)
+                .putLong(Constants.KEY_UPDATE_INSTALL_STARTED_AT, System.currentTimeMillis())
+                .putBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED, false)
+                .putBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_COMPLETED, false)
+                .apply();
+    }
+
+    public void markUpdateInstallResult(String status, String message, int resultCode) {
+        String safeStatus = status == null || status.trim().isEmpty()
+                ? Constants.UPDATE_INSTALL_STATUS_NONE
+                : status.trim();
+        prefs.edit()
+                .putBoolean(Constants.KEY_UPDATE_INSTALL_PENDING,
+                        Constants.UPDATE_INSTALL_STATUS_PENDING.equals(safeStatus))
+                .putString(Constants.KEY_UPDATE_INSTALL_STATUS, safeStatus)
+                .putString(Constants.KEY_UPDATE_INSTALL_MESSAGE, message == null ? "" : message.trim())
+                .putInt(Constants.KEY_UPDATE_INSTALL_RESULT_CODE, resultCode)
+                .apply();
+    }
+
+    public boolean isUpdateInstallPending() {
+        return prefs.getBoolean(Constants.KEY_UPDATE_INSTALL_PENDING, false);
+    }
+
+    public String getUpdateInstallApkPath() {
+        return prefs.getString(Constants.KEY_UPDATE_INSTALL_APK_PATH, "");
+    }
+
+    public String getUpdateInstallTargetVersion() {
+        return prefs.getString(Constants.KEY_UPDATE_INSTALL_TARGET_VERSION, "");
+    }
+
+    public long getUpdateInstallTargetVersionCode() {
+        return prefs.getLong(Constants.KEY_UPDATE_INSTALL_TARGET_VERSION_CODE, 0L);
+    }
+
+    public String getUpdateInstallStatus() {
+        return prefs.getString(Constants.KEY_UPDATE_INSTALL_STATUS, Constants.UPDATE_INSTALL_STATUS_NONE);
+    }
+
+    public String getUpdateInstallMessage() {
+        return prefs.getString(Constants.KEY_UPDATE_INSTALL_MESSAGE, "");
+    }
+
+    public int getUpdateInstallResultCode() {
+        return prefs.getInt(Constants.KEY_UPDATE_INSTALL_RESULT_CODE, Integer.MIN_VALUE);
+    }
+
+    public long getUpdateInstallStartedAt() {
+        return prefs.getLong(Constants.KEY_UPDATE_INSTALL_STARTED_AT, 0L);
+    }
+
+    public void clearUpdateInstallState() {
+        prefs.edit()
+                .putBoolean(Constants.KEY_UPDATE_INSTALL_PENDING, false)
+                .remove(Constants.KEY_UPDATE_INSTALL_APK_PATH)
+                .remove(Constants.KEY_UPDATE_INSTALL_TARGET_VERSION)
+                .remove(Constants.KEY_UPDATE_INSTALL_TARGET_VERSION_CODE)
+                .putString(Constants.KEY_UPDATE_INSTALL_STATUS, Constants.UPDATE_INSTALL_STATUS_NONE)
+                .remove(Constants.KEY_UPDATE_INSTALL_MESSAGE)
+                .remove(Constants.KEY_UPDATE_INSTALL_RESULT_CODE)
+                .remove(Constants.KEY_UPDATE_INSTALL_STARTED_AT)
+                .remove(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED)
+                .remove(Constants.KEY_UPDATE_AUTO_LAUNCH_COMPLETED)
+                .apply();
+    }
+
+    public boolean isUpdateAutoLaunchScheduled() {
+        return prefs.getBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED, false);
+    }
+
+    public boolean isUpdateAutoLaunchCompleted() {
+        return prefs.getBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_COMPLETED, false);
+    }
+
+    public void markUpdateAutoLaunchScheduled() {
+        prefs.edit()
+                .putBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED, true)
+                .apply();
+    }
+
+    public void markUpdateAutoLaunchCompleted() {
+        prefs.edit()
+                .putBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED, false)
+                .putBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_COMPLETED, true)
+                .apply();
+    }
+
     public void saveEmpDataVersion(int version) {
         prefs.edit().putInt(Constants.KEY_EMP_DATA_VERSION, version).apply();
     }
@@ -645,24 +765,74 @@ public class SessionManager {
         }
     }
 
-    private static String buildRandomDeviceId() {
-        return UUID.randomUUID()
-                .toString()
-                .replace("-", "")
-                .substring(0, DEVICE_ID_LENGTH)
-                .toUpperCase(Locale.US);
-    }
-
     private String resolveDeviceId() {
-        String id = "";
+        String testOverride = normalizeDeviceId(resolvedDeviceIdForTest);
+        if (!testOverride.isEmpty()) {
+            return testOverride;
+        }
+        String id = resolveSerialDeviceId();
+        if (!id.isEmpty()) {
+            return id;
+        }
         if (appContext != null) {
             id = buildStableDeviceId(BaiduDeviceFingerprint.get(appContext));
         }
-        return id.isEmpty() ? buildRandomDeviceId() : id;
+        return id;
+    }
+
+    static void setResolvedDeviceIdForTest(String deviceId) {
+        resolvedDeviceIdForTest = deviceId;
+    }
+
+    private String resolveSerialDeviceId() {
+        if (appContext == null) {
+            return "";
+        }
+        return normalizeDeviceId(DeviceIdentityUtils.getDeviceSerial(appContext));
+    }
+
+    private String replaceDeviceId(String deviceId, boolean resetRegistration) {
+        String safeDeviceId = normalizeDeviceId(deviceId);
+        if (safeDeviceId.isEmpty()) {
+            safeDeviceId = resolveDeviceId();
+        }
+        if (safeDeviceId.isEmpty()) {
+            return "";
+        }
+        SharedPreferences.Editor editor = prefs.edit()
+                .putString(Constants.KEY_DEVICE_ID, safeDeviceId);
+        if (resetRegistration) {
+            editor.putBoolean(Constants.KEY_DEVICE_REGISTERED, false)
+                    .putBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, false);
+        }
+        editor.apply();
+        if (resetRegistration) {
+            clearToken();
+        }
+        return safeDeviceId;
+    }
+
+    private static String normalizeDeviceId(String deviceId) {
+        if (deviceId == null) {
+            return "";
+        }
+        String normalized = deviceId.trim();
+        if (normalized.isEmpty()) {
+            return "";
+        }
+        normalized = normalized.replaceAll("[^0-9A-Za-z_-]", "");
+        if (normalized.length() > MAX_DEVICE_ID_LENGTH) {
+            normalized = normalized.substring(0, MAX_DEVICE_ID_LENGTH);
+        }
+        return normalized;
     }
 
     static boolean isModernDeviceId(String deviceId) {
-        return deviceId != null && MODERN_DEVICE_ID_PATTERN.matcher(deviceId.trim()).matches();
+        return isValidDeviceId(deviceId);
+    }
+
+    static boolean isValidDeviceId(String deviceId) {
+        return deviceId != null && DEVICE_ID_PATTERN.matcher(deviceId.trim()).matches();
     }
 
     public static String normalizeBaseUrl(String baseUrl) {

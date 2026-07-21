@@ -21,11 +21,14 @@ public class SessionManagerTest {
     public void setUp() throws Exception {
         setSessionPreferences(new MemorySharedPreferences(), new MemorySharedPreferences());
         setAppContext(null);
+        SessionManager.setResolvedDeviceIdForTest(null);
         SessionManager.get().clearAll();
     }
 
     @After
-    public void tearDown() {
+    public void tearDown() throws Exception {
+        SessionManager.setResolvedDeviceIdForTest(null);
+        setAppContext(null);
         SessionManager.get().clearAll();
     }
 
@@ -132,15 +135,18 @@ public class SessionManagerTest {
     }
 
     @Test
-    public void isModernDeviceId_shouldValidate16CharUppercaseHex() {
+    public void isModernDeviceId_shouldValidateSerialFriendlyId() {
         assertTrue(SessionManager.isModernDeviceId("A1B2C3D4E5F60789"));
-        assertFalse(SessionManager.isModernDeviceId("PDA-2026-0018"));
-        assertFalse(SessionManager.isModernDeviceId("a1b2c3d4e5f60789"));
-        assertFalse(SessionManager.isModernDeviceId("12345678"));
+        assertTrue(SessionManager.isModernDeviceId("PDA-2026-0018"));
+        assertTrue(SessionManager.isModernDeviceId("device_0018"));
+        assertTrue(SessionManager.isModernDeviceId("a1b2c3d4e5f60789"));
+        assertTrue(SessionManager.isModernDeviceId("12345678"));
+        assertFalse(SessionManager.isModernDeviceId("bad id"));
     }
 
     @Test
     public void getOrCreateDeviceId_shouldCreateAndPersist16CharId() {
+        SessionManager.setResolvedDeviceIdForTest(SessionManager.buildStableDeviceId("device-fingerprint-seed"));
         String first = SessionManager.get().getOrCreateDeviceId();
         String second = SessionManager.get().getOrCreateDeviceId();
 
@@ -150,8 +156,9 @@ public class SessionManagerTest {
     }
 
     @Test
-    public void rebuildDeviceId_shouldOverwriteStoredValueAndResetRegisteredFlag() {
-        SessionManager.get().saveDeviceId("PDA-OLD-ID");
+    public void rebuildDeviceId_shouldOverwriteStoredValueAndResetRegisteredFlag() throws Exception {
+        SessionManager.setResolvedDeviceIdForTest(SessionManager.buildStableDeviceId("device-fingerprint-seed"));
+        putRawDeviceId("PDA-OLD-ID");
         SessionManager.get().saveDeviceRegistered(true);
 
         String rebuilt = SessionManager.get().rebuildDeviceId();
@@ -163,8 +170,9 @@ public class SessionManagerTest {
     }
 
     @Test
-    public void getOrCreateDeviceId_shouldMigrateLegacyDeviceId() {
-        SessionManager.get().saveDeviceId("PDA-2026-0018");
+    public void getOrCreateDeviceId_shouldMigrateInvalidLegacyDeviceId() throws Exception {
+        SessionManager.setResolvedDeviceIdForTest(SessionManager.buildStableDeviceId("device-fingerprint-seed"));
+        putRawDeviceId("a b");
         SessionManager.get().saveDeviceRegistered(true);
         SessionManager.get().saveToken("token-legacy", 1893456000L);
 
@@ -174,6 +182,14 @@ public class SessionManagerTest {
         assertEquals(16, migrated.length());
         assertFalse(SessionManager.get().isDeviceRegistered());
         assertEquals(null, SessionManager.get().getToken());
+    }
+
+    @Test
+    public void saveLastWifiConfig_shouldRoundTrip() {
+        SessionManager.get().saveLastWifiConfig("Office-WiFi", "secret123");
+
+        assertEquals("Office-WiFi", SessionManager.get().getLastWifiSsid());
+        assertEquals("secret123", SessionManager.get().getLastWifiPassword());
     }
 
     private void setSessionPreferences(SharedPreferences prefs, SharedPreferences securePrefs) throws Exception {
@@ -190,6 +206,13 @@ public class SessionManagerTest {
         Field appContextField = SessionManager.class.getDeclaredField("appContext");
         appContextField.setAccessible(true);
         appContextField.set(SessionManager.get(), context);
+    }
+
+    private void putRawDeviceId(String value) throws Exception {
+        Field prefsField = SessionManager.class.getDeclaredField("prefs");
+        prefsField.setAccessible(true);
+        SharedPreferences prefs = (SharedPreferences) prefsField.get(SessionManager.get());
+        prefs.edit().putString(Constants.KEY_DEVICE_ID, value).apply();
     }
 
     private static final class MemorySharedPreferences implements SharedPreferences {
