@@ -130,14 +130,14 @@ public class PunchApplication extends Application {
             KioskManager.ensureOwnerKioskPolicies(this);
             startKioskForegroundWatchdog();
         }
-        InteractionLogStore.init(this);
+        InteractionLogStore.init(this); // 日志在应用启动就初始化
         DatabaseHelper.get(this);
         ActivationManager.get().ensureDeviceRegistered(this);
 
         if (SessionManager.get().isTokenValid()) {
             initFaceSDK();
             preparePunchRecognitionData();
-            startSyncService();
+            startSyncService(); // 心跳/同步只在 token 有效时启动
         }
     }
 
