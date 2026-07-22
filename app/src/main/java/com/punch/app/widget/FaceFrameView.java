@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.view.View;
@@ -11,8 +12,10 @@ import android.view.View;
 
 public class FaceFrameView extends View {
 
+    private final Paint maskPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint cornerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint scanPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path outsideFramePath = new Path();
 
     
     private float scanProgress = 0f;
@@ -43,6 +46,9 @@ public class FaceFrameView extends View {
 
     
     private void init() {
+        maskPaint.setColor(0x88000000);
+        maskPaint.setStyle(Paint.Style.FILL);
+
         cornerPaint.setColor(Color.parseColor("#00E5FF"));
         cornerPaint.setStrokeWidth(4f);
         cornerPaint.setStyle(Paint.Style.STROKE);
@@ -58,6 +64,8 @@ public class FaceFrameView extends View {
         super.onDraw(canvas);
 
         RectF frame = getFrameRect();
+        drawPrivacyBlur(canvas, frame);
+
         float cornerLen = 24f;
 
         float left = frame.left;
@@ -72,6 +80,18 @@ public class FaceFrameView extends View {
 
         float scanY = top + (bottom - top) * scanProgress;
         canvas.drawLine(left + 4, scanY, right - 4, scanY, scanPaint);
+    }
+
+    private void drawPrivacyBlur(Canvas canvas, RectF frame) {
+        outsideFramePath.reset();
+        outsideFramePath.setFillType(Path.FillType.EVEN_ODD);
+        outsideFramePath.addRect(0f, 0f, getWidth(), getHeight(), Path.Direction.CW);
+        outsideFramePath.addRect(frame, Path.Direction.CW);
+
+        canvas.save();
+        canvas.clipPath(outsideFramePath);
+        canvas.drawPath(outsideFramePath, maskPaint);
+        canvas.restore();
     }
 
     
