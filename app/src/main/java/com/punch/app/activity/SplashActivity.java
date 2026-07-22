@@ -82,8 +82,10 @@ public class SplashActivity extends AppCompatActivity {
     }
 
     private void routeNext() {
+        boolean tokenValid = SessionManager.get().isTokenValid();
+        boolean setupCompleted = SessionManager.get().isSetupCompleted();
         Intent nextIntent = new Intent(this,
-                LaunchRouteResolver.resolveAuthenticatedEntry(SessionManager.get().isTokenValid()));
+                LaunchRouteResolver.resolveNext(tokenValid, setupCompleted));
         nextIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         startActivity(nextIntent);
         finish();

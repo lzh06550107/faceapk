@@ -13,7 +13,7 @@ import static org.hamcrest.Matchers.endsWith;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
 import com.punch.app.R;
-import com.punch.app.activity.LoginActivity;
+import com.punch.app.activity.SetupWizardActivity;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -23,7 +23,7 @@ public class WifiDialogSmokeTest extends BaseUiSmokeTest {
 
     @Test
     public void configureWifi_shouldOpenDialogAndShowCoreFields() throws Exception {
-        startActivity(LoginActivity.class, "btn_configure_wifi");
+        startActivity(SetupWizardActivity.class, "btn_configure_wifi");
         onView(withId(R.id.btn_configure_wifi)).perform(click());
 
         onView(withHint("SSID")).check(matches(isDisplayed()));

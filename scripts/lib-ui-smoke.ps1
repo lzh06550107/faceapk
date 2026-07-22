@@ -247,19 +247,35 @@ function Invoke-LoginScreenSmoke {
     Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'et_account') | Out-Null
     Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'et_password') | Out-Null
     Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'btn_login') | Out-Null
-    Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'btn_configure_wifi') | Out-Null
 }
 
 function Invoke-WifiDialogSmoke {
     Write-Host '[ui] Checking Wi-Fi dialog...'
-    Start-UiSmokeActivity -ActivityClass '.activity.UiTestLoginHostActivity'
-    Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'et_account') | Out-Null
+    Start-UiSmokeActivity -ActivityClass '.activity.UiTestSetupWizardHostActivity'
     $result = Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'btn_configure_wifi')
     Tap-UiNode -Node $result.Node
 
     Wait-UiNodeByResourceId -ResourceId 'android:id/button1' | Out-Null
     Wait-UiNodeByResourceId -ResourceId 'android:id/button2' | Out-Null
     Wait-UiNodeByResourceId -ResourceId 'android:id/button3' | Out-Null
+}
+
+function Invoke-SetupWizardSmoke {
+    Write-Host '[ui] Checking setup wizard...'
+    Start-UiSmokeActivity -ActivityClass '.activity.UiTestSetupWizardHostActivity'
+    $wifiPage = Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'btn_configure_wifi')
+    Assert-UiResourceIdsPresent -Xml $wifiPage.Xml -ResourceIds @(
+        (Get-UiSmokeResourceId -Id 'btn_configure_wifi'),
+        (Get-UiSmokeResourceId -Id 'btn_next')
+    )
+    $nextButton = Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'btn_next')
+    Tap-UiNode -Node $nextButton.Node
+    $serverPage = Wait-UiNodeByResourceId -ResourceId (Get-UiSmokeResourceId -Id 'et_base_url')
+    Assert-UiResourceIdsPresent -Xml $serverPage.Xml -ResourceIds @(
+        (Get-UiSmokeResourceId -Id 'et_base_url'),
+        (Get-UiSmokeResourceId -Id 'et_company_id'),
+        (Get-UiSmokeResourceId -Id 'btn_finish')
+    )
 }
 
 function Invoke-AdvancedConfigSmoke {

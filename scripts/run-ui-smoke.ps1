@@ -68,6 +68,7 @@ try {
 
     Invoke-UiSmokeStep -Name 'login screen' -Action { Invoke-LoginScreenSmoke }
     Invoke-UiSmokeStep -Name 'wifi dialog' -Action { Invoke-WifiDialogSmoke }
+    Invoke-UiSmokeStep -Name 'setup wizard' -Action { Invoke-SetupWizardSmoke }
     Invoke-UiSmokeStep -Name 'advanced config' -Action { Invoke-AdvancedConfigSmoke }
     if ($usingInstalledProdPackage) {
         Invoke-UiSmokeStep -Name 'main screen' -Action { Invoke-MainScreenSmoke }

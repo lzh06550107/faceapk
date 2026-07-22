@@ -11,6 +11,7 @@ public class Constants {
     public static final String KEY_DEVICE_ID = "device_id";
     public static final String KEY_DEVICE_REGISTERED = "device_registered";
     public static final String KEY_DEVICE_CONFIG_INITIALIZED = "device_config_initialized";
+    public static final String KEY_SETUP_COMPLETED = "setup_completed";
     public static final String KEY_COMPANY_ID = "company_id";
     public static final String KEY_BASE_URL = "base_url";
     public static final String KEY_KIOSK_ENABLED = "kiosk_enabled";

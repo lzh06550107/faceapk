@@ -19,4 +19,11 @@ final class LaunchRouteResolver {
     static Class<?> resolveAuthenticatedEntry(boolean tokenValid) {
         return tokenValid ? MainActivity.class : LoginActivity.class;
     }
+
+    static Class<?> resolveNext(boolean tokenValid, boolean setupCompleted) {
+        if (tokenValid) {
+            return MainActivity.class;
+        }
+        return setupCompleted ? LoginActivity.class : SetupWizardActivity.class;
+    }
 }

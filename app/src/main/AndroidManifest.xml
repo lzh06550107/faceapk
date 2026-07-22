@@ -63,6 +63,12 @@
         </activity>
 
         <activity
+            android:name=".activity.SetupWizardActivity"
+            android:launchMode="singleTop"
+            android:lockTaskMode="if_whitelisted"
+            android:screenOrientation="portrait"/>
+
+        <activity
             android:name=".activity.LoginActivity"
             android:launchMode="singleTop"
             android:lockTaskMode="if_whitelisted"
@@ -94,7 +100,7 @@
             android:lockTaskMode="if_whitelisted"
             android:screenOrientation="portrait" />
 
-        <!-- 鍚庡彴鍚屾 Service -->
+        <!-- 鍚庡彴鍚屾 Service -->
         <service
             android:name=".service.SyncService"
             android:exported="false"/>
@@ -132,4 +138,3 @@
 
     </application>
 </manifest>
-

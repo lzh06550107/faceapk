@@ -2,7 +2,6 @@ package com.punch.app.activity;
 
 import android.content.Intent;
 import android.os.Bundle;
-import android.text.InputType;
 import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
@@ -10,9 +9,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
 
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.punch.app.PunchApplication;
@@ -25,7 +22,6 @@ import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.service.SyncService;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
-import com.punch.app.utils.WifiConfigDialogHelper;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,12 +35,9 @@ public class LoginActivity extends AppCompatActivity {
     private EditText etAccount;
     private EditText etPassword;
     private Button btnLogin;
-    private Button btnConfigureWifi;
     private ProgressBar progress;
     private TextView tvError;
     private TextView tvProgressStatus;
-    private TextView tvAdvancedSettings;
-    private WifiConfigDialogHelper wifiConfigDialogHelper;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -56,27 +49,21 @@ public class LoginActivity extends AppCompatActivity {
         etAccount = findViewById(R.id.et_account);
         etPassword = findViewById(R.id.et_password);
         btnLogin = findViewById(R.id.btn_login);
-        btnConfigureWifi = findViewById(R.id.btn_configure_wifi);
         progress = findViewById(R.id.progress);
         tvError = findViewById(R.id.tv_error);
         tvProgressStatus = findViewById(R.id.tv_progress_status);
-        tvAdvancedSettings = findViewById(R.id.tv_advanced_settings);
-        wifiConfigDialogHelper = new WifiConfigDialogHelper(this);
 
         String savedAccount = SessionManager.get().getAccount();
         String savedPassword = SessionManager.get().getPassword();
         etAccount.setText(savedAccount.isEmpty() ? DEFAULT_ACCOUNT : savedAccount);
         etPassword.setText(savedPassword.isEmpty() ? DEFAULT_PASSWORD : savedPassword);
         btnLogin.setOnClickListener(v -> doLogin());
-        btnConfigureWifi.setOnClickListener(v -> wifiConfigDialogHelper.showConfigDialog());
-        tvAdvancedSettings.setOnClickListener(v -> showAdvancedPasswordDialog());
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         KioskManager.enterIfPossible(this);
-        wifiConfigDialogHelper.onResume();
         refreshDeviceIdFromPreferredSource();
         scheduleStableUpdateAutoLaunchCancel();
     }
@@ -84,7 +71,6 @@ public class LoginActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        wifiConfigDialogHelper.onDestroy();
     }
 
     private void scheduleStableUpdateAutoLaunchCancel() {
@@ -127,31 +113,6 @@ public class LoginActivity extends AppCompatActivity {
     }
     private void refreshDeviceIdFromPreferredSource() {
         SessionManager.get().getDeviceId();
-    }
-
-    private void showAdvancedPasswordDialog() {
-        EditText passwordInput = new EditText(this);
-        passwordInput.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        passwordInput.setHint("请输入密码");
-        int horizontal = (int) (16 * getResources().getDisplayMetrics().density);
-        int vertical = (int) (12 * getResources().getDisplayMetrics().density);
-        passwordInput.setPadding(horizontal, vertical, horizontal, vertical);
-
-        new AlertDialog.Builder(this)
-                .setTitle("高级设置")
-                .setView(passwordInput)
-                .setPositiveButton("确定", (dialog, which) -> {
-                    String password = passwordInput.getText() == null
-                            ? ""
-                            : passwordInput.getText().toString().trim();
-                    if (!SessionManager.get().getAdvancedSettingsPassword().equals(password)) {
-                        Toast.makeText(this, "密码错误", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    startActivity(new Intent(this, AdvancedConfigActivity.class));
-                })
-                .setNegativeButton("取消", null)
-                .show();
     }
 
     private void doLogin() {

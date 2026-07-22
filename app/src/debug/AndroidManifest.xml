@@ -19,5 +19,12 @@
             android:screenOrientation="portrait"
             android:taskAffinity="com.punch.app.uitest"
             android:theme="@style/AppTheme" />
+        <activity
+            android:name=".activity.UiTestSetupWizardHostActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.punch.app.uitest"
+            android:theme="@style/AppTheme" />
     </application>
 </manifest>

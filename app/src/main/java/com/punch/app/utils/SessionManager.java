@@ -160,6 +160,14 @@ public class SessionManager {
         prefs.edit().putBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, initialized).apply();
     }
 
+    public boolean isSetupCompleted() {
+        return prefs.getBoolean(Constants.KEY_SETUP_COMPLETED, false);
+    }
+
+    public void saveSetupCompleted(boolean completed) {
+        prefs.edit().putBoolean(Constants.KEY_SETUP_COMPLETED, completed).apply();
+    }
+
     public void saveCompanyId(int companyId) {
         prefs.edit().putInt(Constants.KEY_COMPANY_ID, companyId > 0 ? companyId : Constants.DEFAULT_COMPANY_ID).apply();
     }

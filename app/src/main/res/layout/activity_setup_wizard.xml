@@ -28,48 +28,15 @@
         android:paddingTop="40dp"
         android:paddingBottom="28dp">
 
-        <LinearLayout
+        <ViewFlipper
+            android:id="@+id/flipper"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_horizontal"
-            android:orientation="vertical">
-
-            <FrameLayout
-                android:layout_width="84dp"
-                android:layout_height="84dp"
-                android:layout_marginTop="18dp"
-                android:background="@drawable/bg_splash_icon_plate"
-                android:padding="18dp">
-
-                <ImageView
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:contentDescription="@string/app_name"
-                    android:src="@drawable/ic_launcher" />
-            </FrameLayout>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="工厂手持打卡"
-                android:textColor="@color/white"
-                android:textSize="30sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:gravity="center"
-                android:text="登录后自动同步设备配置、员工数据与人脸库"
-                android:textColor="#BBD4EA"
-                android:textSize="13sp" />
+            android:layout_height="wrap_content">
 
             <LinearLayout
+                android:id="@+id/page_wifi"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="26dp"
                 android:background="@drawable/bg_login_panel"
                 android:elevation="10dp"
                 android:orientation="vertical"
@@ -78,7 +45,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="设备登录"
+                    android:text="第 1 步 · 配置 Wi-Fi"
                     android:textColor="@color/white"
                     android:textSize="22sp"
                     android:textStyle="bold" />
@@ -87,7 +54,77 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
-                    android:text="使用管理员账号接入当前设备"
+                    android:text="将设备接入网络后才能登录平台。开放网络可留空密码。"
+                    android:textColor="#9AB2C8"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tv_wifi_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="22dp"
+                    android:text="尚未配置 Wi-Fi"
+                    android:textColor="#BBD4EA"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btn_configure_wifi"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/bg_login_input"
+                    android:text="配置 Wi-Fi"
+                    android:textAllCaps="false"
+                    android:textColor="#DCE7F2"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_skip_wifi"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@android:color/transparent"
+                    android:text="跳过，稍后再配"
+                    android:textAllCaps="false"
+                    android:textColor="#6F879A"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btn_next"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="18dp"
+                    android:background="@drawable/bg_login_button"
+                    android:text="下一步"
+                    android:textAllCaps="false"
+                    android:textColor="@color/white"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/page_server"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_login_panel"
+                android:elevation="10dp"
+                android:orientation="vertical"
+                android:padding="22dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="第 2 步 · 配置服务器"
+                    android:textColor="@color/white"
+                    android:textSize="22sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="填写平台地址与公司 ID，登录后将据此同步设备配置。"
                     android:textColor="#9AB2C8"
                     android:textSize="12sp" />
 
@@ -95,19 +132,19 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="22dp"
-                    android:text="账号"
+                    android:text="Base URL"
                     android:textColor="#DCE7F2"
                     android:textSize="13sp"
                     android:textStyle="bold" />
 
                 <EditText
-                    android:id="@+id/et_account"
+                    android:id="@+id/et_base_url"
                     android:layout_width="match_parent"
                     android:layout_height="50dp"
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_login_input"
-                    android:hint="请输入账号"
-                    android:inputType="text"
+                    android:hint="http://host:port"
+                    android:inputType="textUri"
                     android:paddingHorizontal="14dp"
                     android:singleLine="true"
                     android:textColor="@color/white"
@@ -117,19 +154,19 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
-                    android:text="密码"
+                    android:text="Company ID"
                     android:textColor="#DCE7F2"
                     android:textSize="13sp"
                     android:textStyle="bold" />
 
                 <EditText
-                    android:id="@+id/et_password"
+                    android:id="@+id/et_company_id"
                     android:layout_width="match_parent"
                     android:layout_height="50dp"
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_login_input"
-                    android:hint="请输入密码"
-                    android:inputType="textPassword"
+                    android:hint="公司 ID"
+                    android:inputType="number"
                     android:paddingHorizontal="14dp"
                     android:singleLine="true"
                     android:textColor="@color/white"
@@ -147,44 +184,29 @@
                     android:textSize="13sp"
                     android:visibility="gone" />
 
-                <LinearLayout
+                <Button
+                    android:id="@+id/btn_prev"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:gravity="center"
-                    android:orientation="horizontal">
-
-                    <ProgressBar
-                        android:id="@+id/progress"
-                        android:layout_width="18dp"
-                        android:layout_height="18dp"
-                        android:indeterminate="true"
-                        android:indeterminateTint="#8ED8FF"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/tv_progress_status"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:gravity="center"
-                        android:textColor="#BBD4EA"
-                        android:textSize="13sp"
-                        android:visibility="gone" />
-                </LinearLayout>
+                    android:layout_height="48dp"
+                    android:layout_marginTop="18dp"
+                    android:background="@android:color/transparent"
+                    android:text="上一步"
+                    android:textAllCaps="false"
+                    android:textColor="#6F879A"
+                    android:textSize="13sp" />
 
                 <Button
-                    android:id="@+id/btn_login"
+                    android:id="@+id/btn_finish"
                     android:layout_width="match_parent"
                     android:layout_height="52dp"
-                    android:layout_marginTop="18dp"
+                    android:layout_marginTop="10dp"
                     android:background="@drawable/bg_login_button"
-                    android:text="登录并同步设备"
+                    android:text="完成并登录"
                     android:textAllCaps="false"
                     android:textColor="@color/white"
                     android:textSize="16sp"
                     android:textStyle="bold" />
             </LinearLayout>
-        </LinearLayout>
+        </ViewFlipper>
     </ScrollView>
 </FrameLayout>
