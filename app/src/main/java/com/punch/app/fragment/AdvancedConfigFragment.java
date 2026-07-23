@@ -7,6 +7,7 @@ import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.hardware.Camera;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -34,12 +35,14 @@ import com.punch.app.activity.LocalEmployeeDebugActivity;
 import com.punch.app.activation.BaiduDeviceFingerprint;
 import com.punch.app.face.FaceManager;
 import com.punch.app.network.InteractionLogger;
+import com.punch.app.network.dto.DeviceDto;
 import com.punch.app.receiver.KioskDeviceAdminReceiver;
 import com.punch.app.utils.Constants;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 
 import java.text.SimpleDateFormat;
+import java.util.List;
 import java.util.Locale;
 
 public class AdvancedConfigFragment extends Fragment {
@@ -72,6 +75,7 @@ public class AdvancedConfigFragment extends Fragment {
     private Button btnSaveConfig;
     private Button btnKioskMode;
     private MaterialButton btnViewLogs;
+    private MaterialButton btnViewLocalConfig;
     private MaterialButton btnViewLocalEmployees;
     private MaterialButton btnClearDeviceOwner;
 
@@ -121,6 +125,7 @@ public class AdvancedConfigFragment extends Fragment {
         btnSaveConfig = view.findViewById(R.id.btn_save_config);
         btnKioskMode = view.findViewById(R.id.btn_kiosk_mode);
         btnViewLogs = view.findViewById(R.id.btn_view_logs);
+        btnViewLocalConfig = view.findViewById(R.id.btn_view_local_config);
         btnViewLocalEmployees = view.findViewById(R.id.btn_view_local_employees);
         btnClearDeviceOwner = view.findViewById(R.id.btn_clear_device_owner);
 
@@ -131,6 +136,7 @@ public class AdvancedConfigFragment extends Fragment {
         btnSaveConfig.setOnClickListener(v -> saveConfig());
         btnKioskMode.setOnClickListener(v -> toggleKioskMode());
         btnViewLogs.setOnClickListener(v -> startActivity(new Intent(requireContext(), InteractionLogActivity.class)));
+        btnViewLocalConfig.setOnClickListener(v -> showLocalConfigDialog());
         btnViewLocalEmployees.setOnClickListener(v -> startActivity(new Intent(requireContext(), LocalEmployeeDebugActivity.class)));
         btnClearDeviceOwner.setOnClickListener(v -> confirmClearDeviceOwner());
         renderConfig();
@@ -274,15 +280,20 @@ public class AdvancedConfigFragment extends Fragment {
             return;
         }
 
-        SessionManager.get().saveBaseUrl(baseUrl);
-        SessionManager.get().saveCompanyId(companyId);
-        SessionManager.get().saveMatchThreshold(seekMatchThreshold.getProgress() / 100f);
-        SessionManager.get().saveFaceThreshold(seekFaceThreshold.getProgress() / 100f);
-        SessionManager.get().saveRecognitionDistanceMode(selectedDistanceModeValue);
-        SessionManager.get().saveLivenessCheck(switchLiveness.isChecked());
-        SessionManager.get().saveLivenessThreshold(seekLivenessThreshold.getProgress() / 100f);
-        SessionManager.get().saveMaskDetectEnabled(switchMaskDetect.isChecked());
-        SessionManager.get().saveRecognitionTimeoutSeconds(selectedRecognitionTimeoutValue);
+        SessionManager session = SessionManager.get();
+        boolean serverChanged = !baseUrl.equals(session.getBaseUrl()) || companyId != session.getCompanyId();
+        session.saveBaseUrl(baseUrl);
+        session.saveCompanyId(companyId);
+        if (serverChanged) {
+            session.clearServerBoundState();
+        }
+        session.saveMatchThreshold(seekMatchThreshold.getProgress() / 100f);
+        session.saveFaceThreshold(seekFaceThreshold.getProgress() / 100f);
+        session.saveRecognitionDistanceMode(selectedDistanceModeValue);
+        session.saveLivenessCheck(switchLiveness.isChecked());
+        session.saveLivenessThreshold(seekLivenessThreshold.getProgress() / 100f);
+        session.saveMaskDetectEnabled(switchMaskDetect.isChecked());
+        session.saveRecognitionTimeoutSeconds(selectedRecognitionTimeoutValue);
 
         if (FaceManager.get().isInitialized()) {
             FaceManager.get().refreshRuntimeConfig();
@@ -290,6 +301,231 @@ public class AdvancedConfigFragment extends Fragment {
 
         renderConfig();
         Toast.makeText(requireContext(), "高级配置已保存", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showLocalConfigDialog() {
+        if (!isAdded()) {
+            return;
+        }
+        String configText = buildLocalConfigText();
+        new AlertDialog.Builder(requireContext())
+                .setTitle("\u672c\u5730\u914d\u7f6e")
+                .setMessage(configText)
+                .setNegativeButton("\u5173\u95ed", null)
+                .setPositiveButton("\u590d\u5236", (dialog, which) -> copyText("local_config", configText))
+                .show();
+    }
+
+    private String buildLocalConfigText() {
+        SessionManager session = SessionManager.get();
+        StringBuilder builder = new StringBuilder();
+
+        appendSection(builder, "\u7cfb\u7edf\u4e0e\u6388\u6743");
+        appendLine(builder, "Base URL", session.getBaseUrl());
+        appendLine(builder, "Company ID", String.valueOf(session.getCompanyId()));
+        appendLine(builder, "\u9996\u6b21\u914d\u7f6e\u5b8c\u6210", formatBoolean(session.isSetupCompleted()));
+        appendLine(builder, "\u8bbe\u5907 ID", emptyFallback(session.getDeviceId()));
+        appendLine(builder, "\u8bbe\u5907\u5df2\u6ce8\u518c", formatBoolean(session.isDeviceRegistered()));
+        appendLine(builder, "\u8bbe\u5907\u914d\u7f6e\u5df2\u521d\u59cb\u5316", formatBoolean(session.isDeviceConfigInitialized()));
+        appendLine(builder, "\u6388\u6743\u6307\u7eb9", emptyFallback(BaiduDeviceFingerprint.get(requireContext())));
+        appendLine(builder, "\u6388\u6743\u65b9\u5f0f", formatActivationMode(session.getActivationMode()));
+        appendLine(builder, "\u6fc0\u6d3b\u72b6\u6001", formatActivationStatus(session.getActivationStatus()));
+        appendLine(builder, "\u6fc0\u6d3b\u65f6\u95f4", formatEpochSeconds(session.getLastActivationTime()));
+
+        appendSection(builder, "\u767b\u5f55\u4e0e\u540c\u6b65");
+        appendLine(builder, "\u8d26\u53f7", session.getAccount());
+        appendLine(builder, "\u767b\u5f55\u5bc6\u7801", session.getPassword());
+        appendLine(builder, "Token", session.getToken());
+        appendLine(builder, "Token \u6709\u6548", formatBoolean(session.isTokenValid()));
+        appendLine(builder, "Token \u8fc7\u671f\u65f6\u95f4", formatEpochSeconds(session.getTokenExpireAt()));
+        appendLine(builder, "\u6700\u540e\u5fc3\u8df3\u65f6\u95f4", formatEpochSeconds(session.getLastHeartbeatTime()));
+        appendLine(builder, "\u6700\u540e\u670d\u52a1\u5668\u65f6\u95f4", formatEpochSeconds(session.getLastServerTime()));
+
+        appendSection(builder, "\u4e1a\u52a1\u7ed1\u5b9a");
+        appendLine(builder, "\u7ebf\u4f53", buildLineBindingText(session));
+        appendLine(builder, "\u73ed\u7ec4", buildTeamBindingText(session));
+        appendLine(builder, "\u73ed\u6b21\u65f6\u95f4", joinStrings(session.getCurrentTeamTimeRanges()));
+        appendLine(builder, "\u6253\u5361\u4eba\u6570\u4e0a\u9650", String.valueOf(session.getCheckCount()));
+        appendLine(builder, "\u53ef\u9009\u7ebf\u4f53", buildLineOptionsText(session.getLineBindingOptions()));
+        appendLine(builder, "\u53ef\u9009\u73ed\u7ec4", buildTeamOptionsText(session.getTeamBindingOptions()));
+
+        appendSection(builder, "\u8bc6\u522b\u53c2\u6570");
+        appendLine(builder, "\u4eba\u8138\u6bd4\u5bf9\u9608\u503c", formatFloat(session.getMatchThreshold()));
+        appendLine(builder, "\u4eba\u8138\u68c0\u6d4b\u9608\u503c", formatFloat(session.getFaceThreshold()));
+        appendLine(builder, "\u6d3b\u4f53\u68c0\u6d4b", formatBoolean(session.isLivenessCheck()));
+        appendLine(builder, "\u6d3b\u4f53\u68c0\u6d4b\u9608\u503c", formatFloat(session.getLivenessThreshold()));
+        appendLine(builder, "\u53e3\u7f69\u68c0\u6d4b", formatBoolean(session.isMaskDetectEnabled()));
+        appendLine(builder, "\u8bc6\u522b\u8ddd\u79bb", formatDistanceMode(session.getRecognitionDistanceMode()));
+        appendLine(builder, "\u8bc6\u522b\u8d85\u65f6", session.getRecognitionTimeoutSeconds() + "s");
+        appendLine(builder, "\u6700\u5c0f\u4eba\u8138\u5c3a\u5bf8", String.valueOf(session.getMinFaceSizeForRecognitionDistance()));
+
+        appendSection(builder, "\u8bbe\u5907\u9009\u9879");
+        appendLine(builder, "\u6444\u50cf\u5934", formatCameraFacing(session.getCameraFacing(-1)));
+        appendLine(builder, "\u58f0\u97f3", formatBoolean(session.isSoundEnabled()));
+        appendLine(builder, "Kiosk", formatBoolean(session.isKioskEnabled()));
+        appendLine(builder, "\u4e0a\u6b21 Wi-Fi SSID", session.getLastWifiSsid());
+        appendLine(builder, "\u4e0a\u6b21 Wi-Fi \u5bc6\u7801", session.getLastWifiPassword());
+
+        appendSection(builder, "\u66f4\u65b0");
+        appendLine(builder, "\u9700\u8981\u66f4\u65b0", formatBoolean(session.isUpdateNeeded()));
+        appendLine(builder, "APK URL", session.getUpdateApkUrl());
+        appendLine(builder, "\u5f53\u524d\u7248\u672c", session.getUpdateCurrentVersion());
+        appendLine(builder, "\u76ee\u6807\u7248\u672c", session.getUpdateTargetVersion());
+        appendLine(builder, "\u7248\u672c\u540d", session.getUpdateVersionName());
+        appendLine(builder, "\u5b89\u88c5\u72b6\u6001", session.getUpdateInstallStatus());
+        appendLine(builder, "\u5b89\u88c5\u6d88\u606f", session.getUpdateInstallMessage());
+
+        return builder.toString();
+    }
+
+    private void copyText(String label, String text) {
+        ClipboardManager clipboardManager =
+                (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboardManager == null) {
+            Toast.makeText(requireContext(), "\u526a\u8d34\u677f\u670d\u52a1\u4e0d\u53ef\u7528", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        clipboardManager.setPrimaryClip(ClipData.newPlainText(label, text == null ? "" : text));
+        Toast.makeText(requireContext(), "\u672c\u5730\u914d\u7f6e\u5df2\u590d\u5236", Toast.LENGTH_SHORT).show();
+    }
+
+    private void appendSection(StringBuilder builder, String title) {
+        if (builder.length() > 0) {
+            builder.append('\n');
+        }
+        builder.append("[").append(title).append("]").append('\n');
+    }
+
+    private void appendLine(StringBuilder builder, String label, String value) {
+        builder.append(label).append(": ").append(emptyFallback(value)).append('\n');
+    }
+
+    private String buildLineBindingText(SessionManager session) {
+        String code = session.getLineCode();
+        String name = session.getLineName();
+        if (code.isEmpty() && name.isEmpty()) {
+            return "-";
+        }
+        if (name.isEmpty()) {
+            return code;
+        }
+        if (code.isEmpty()) {
+            return name;
+        }
+        return name + " (" + code + ")";
+    }
+
+    private String buildTeamBindingText(SessionManager session) {
+        int id = session.getTeamBindingId();
+        String name = session.getTeamBindingName();
+        if (id <= 0 && name.isEmpty()) {
+            return "-";
+        }
+        if (name.isEmpty()) {
+            return String.valueOf(id);
+        }
+        if (id <= 0) {
+            return name;
+        }
+        return name + " (" + id + ")";
+    }
+
+    private String buildLineOptionsText(List<DeviceDto.LineOptionData> options) {
+        if (options == null || options.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (DeviceDto.LineOptionData option : options) {
+            if (option == null) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append("; ");
+            }
+            String name = option.name == null ? "" : option.name.trim();
+            String code = option.code == null ? "" : option.code.trim();
+            if (!name.isEmpty() && !code.isEmpty()) {
+                builder.append(name).append(" (").append(code).append(")");
+            } else {
+                builder.append(!name.isEmpty() ? name : code);
+            }
+        }
+        return builder.length() == 0 ? "-" : builder.toString();
+    }
+
+    private String buildTeamOptionsText(List<DeviceDto.TeamOptionData> options) {
+        if (options == null || options.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (DeviceDto.TeamOptionData option : options) {
+            if (option == null) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append("; ");
+            }
+            String name = option.name == null ? "" : option.name.trim();
+            builder.append(name.isEmpty() ? String.valueOf(option.id) : name + " (" + option.id + ")");
+            String ranges = joinStrings(option.timeRanges);
+            if (!"-".equals(ranges)) {
+                builder.append(" ").append(ranges);
+            }
+        }
+        return builder.length() == 0 ? "-" : builder.toString();
+    }
+
+    private String joinStrings(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (String value : values) {
+            if (value == null || value.trim().isEmpty()) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append(", ");
+            }
+            builder.append(value.trim());
+        }
+        return builder.length() == 0 ? "-" : builder.toString();
+    }
+
+    private String formatBoolean(boolean value) {
+        return value ? "\u662f" : "\u5426";
+    }
+
+    private String formatFloat(float value) {
+        return String.format(Locale.getDefault(), "%.2f", value);
+    }
+
+    private String formatDistanceMode(String mode) {
+        if (Constants.DISTANCE_MODE_NEAR.equals(mode)) {
+            return "\u8fd1\u8ddd\u79bb";
+        }
+        if (Constants.DISTANCE_MODE_FAR.equals(mode)) {
+            return "\u8fdc\u8ddd\u79bb";
+        }
+        return "\u6807\u51c6";
+    }
+
+    private String formatCameraFacing(int cameraFacing) {
+        if (cameraFacing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            return "\u524d\u7f6e";
+        }
+        if (cameraFacing == Camera.CameraInfo.CAMERA_FACING_BACK) {
+            return "\u540e\u7f6e";
+        }
+        return "\u672a\u77e5";
+    }
+
+    private String formatEpochSeconds(long seconds) {
+        if (seconds <= 0) {
+            return "-";
+        }
+        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                .format(new java.util.Date(seconds * 1000L));
     }
 
     private void toggleKioskMode() {

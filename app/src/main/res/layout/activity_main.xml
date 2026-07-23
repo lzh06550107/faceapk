@@ -3,6 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/bg"
     android:orientation="vertical">
 
     <!-- Fragment 容器 -->
@@ -10,6 +11,7 @@
         android:id="@+id/fragment_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
+        android:background="@color/bg"
         android:layout_weight="1"/>
 
     <!-- 状态横幅（离线/待同步）-->

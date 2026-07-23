@@ -23,5 +23,6 @@ public class LoginActivitySmokeTest extends BaseUiSmokeTest {
         onView(withId(R.id.et_account)).check(matches(isDisplayed()));
         onView(withId(R.id.et_password)).check(matches(isDisplayed()));
         onView(withId(R.id.btn_login)).check(matches(isDisplayed()));
+        onView(withId(R.id.btn_edit_setup)).check(matches(isDisplayed()));
     }
 }

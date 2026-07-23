@@ -160,6 +160,29 @@ public class SessionManager {
         prefs.edit().putBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, initialized).apply();
     }
 
+    public void clearServerBoundState() {
+        clearToken();
+        prefs.edit()
+                .putBoolean(Constants.KEY_DEVICE_REGISTERED, false)
+                .putBoolean(Constants.KEY_DEVICE_CONFIG_INITIALIZED, false)
+                .remove(Constants.KEY_LINE_CODE)
+                .remove(Constants.KEY_LINE_NAME)
+                .remove(Constants.KEY_LINE_OPTIONS)
+                .remove(Constants.KEY_TEAM_BINDING_ID)
+                .remove(Constants.KEY_TEAM_BINDING_NAME)
+                .remove(Constants.KEY_TEAM_OPTIONS)
+                .remove(Constants.KEY_TEAM_TIME_RANGES)
+                .remove(Constants.KEY_CHECK_COUNT)
+                .remove(Constants.KEY_UPDATE_NEED)
+                .remove(Constants.KEY_UPDATE_APK_URL)
+                .remove(Constants.KEY_UPDATE_CURRENT_VERSION)
+                .remove(Constants.KEY_UPDATE_TARGET_VERSION)
+                .remove(Constants.KEY_UPDATE_VERSION_NAME)
+                .remove(Constants.KEY_LAST_HEARTBEAT_TIME)
+                .remove(Constants.KEY_LAST_SERVER_TIME)
+                .apply();
+    }
+
     public boolean isSetupCompleted() {
         return prefs.getBoolean(Constants.KEY_SETUP_COMPLETED, false);
     }

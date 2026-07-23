@@ -1315,7 +1315,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             }
 
             if (FaceManager.ERROR_LIVENESS_CHECK_FAILED.equals(result.errorMsg)) {
-                logLivenessFailure(width, height, angle, mirror, durationMs);
+                logLivenessFailure(width, height, angle, mirror, durationMs, result.debugDetail);
             }
 
             beginRecognitionAttempt();
@@ -1457,13 +1457,21 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         return System.currentTimeMillis() < previewLayoutSettlingUntil;
     }
 
-    private void logLivenessFailure(int width, int height, int angle, int mirror, long durationMs) {
+    private void logLivenessFailure(int width,
+                                    int height,
+                                    int angle,
+                                    int mirror,
+                                    long durationMs,
+                                    @Nullable String livenessDetail) {
         long now = System.currentTimeMillis();
         if (now - lastLivenessDebugLogAt < LIVENESS_DEBUG_LOG_COOLDOWN_MS) {
             return;
         }
         lastLivenessDebugLogAt = now;
-        String detail = "width=" + width
+        String detail = "liveness=" + (livenessDetail == null || livenessDetail.trim().isEmpty()
+                ? "-"
+                : livenessDetail.trim())
+                + "\nwidth=" + width
                 + ", height=" + height
                 + ", angle=" + angle
                 + ", mirror=" + mirror
@@ -2097,7 +2105,6 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         updatePunchTypeFromSelection();
     }
 }
-
 
 
 

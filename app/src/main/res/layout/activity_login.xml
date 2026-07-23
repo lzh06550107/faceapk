@@ -184,6 +184,17 @@
                     android:textColor="@color/white"
                     android:textSize="16sp"
                     android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_edit_setup"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@android:color/transparent"
+                    android:text="&#x4FEE;&#x6539;&#x7F51;&#x7EDC;/&#x670D;&#x52A1;&#x5668;&#x914D;&#x7F6E;"
+                    android:textAllCaps="false"
+                    android:textColor="#8ED8FF"
+                    android:textSize="13sp" />
             </LinearLayout>
         </LinearLayout>
     </ScrollView>

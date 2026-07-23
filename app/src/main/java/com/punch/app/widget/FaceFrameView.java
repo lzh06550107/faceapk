@@ -46,7 +46,7 @@ public class FaceFrameView extends View {
 
     
     private void init() {
-        maskPaint.setColor(0x88000000);
+        maskPaint.setColor(0xEE000000);
         maskPaint.setStyle(Paint.Style.FILL);
 
         cornerPaint.setColor(Color.parseColor("#00E5FF"));

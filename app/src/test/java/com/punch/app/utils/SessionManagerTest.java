@@ -125,6 +125,32 @@ public class SessionManagerTest {
     }
 
     @Test
+    public void clearServerBoundState_shouldResetServerDerivedState() throws Exception {
+        SessionManager.get().saveToken("token", 1893456000L);
+        SessionManager.get().saveDeviceRegistered(true);
+        SessionManager.get().saveDeviceConfigInitialized(true);
+        SessionManager.get().saveLineBinding("L1", "Line 1");
+        SessionManager.get().saveTeamBindingId(7);
+        SessionManager.get().saveTeamBindingName("Team 7");
+        putRawString(Constants.KEY_TEAM_TIME_RANGES, "[\"08:00-17:00\"]");
+        SessionManager.get().saveCheckCount(3);
+        SessionManager.get().saveUpdateInfo(true, "https://example.com/app.apk", "1.0.0", "2.0.0", "release");
+
+        SessionManager.get().clearServerBoundState();
+
+        assertEquals(null, SessionManager.get().getToken());
+        assertFalse(SessionManager.get().isDeviceRegistered());
+        assertFalse(SessionManager.get().isDeviceConfigInitialized());
+        assertEquals("", SessionManager.get().getLineCode());
+        assertEquals("", SessionManager.get().getLineName());
+        assertEquals(0, SessionManager.get().getTeamBindingId());
+        assertEquals("", SessionManager.get().getTeamBindingName());
+        assertTrue(SessionManager.get().getCurrentTeamTimeRanges().isEmpty());
+        assertEquals(0, SessionManager.get().getCheckCount());
+        assertFalse(SessionManager.get().isUpdateNeeded());
+    }
+
+    @Test
     public void buildStableDeviceId_shouldReturnStableUppercase16Chars() {
         String first = SessionManager.buildStableDeviceId("device-fingerprint-seed");
         String second = SessionManager.buildStableDeviceId("device-fingerprint-seed");
@@ -209,10 +235,14 @@ public class SessionManagerTest {
     }
 
     private void putRawDeviceId(String value) throws Exception {
+        putRawString(Constants.KEY_DEVICE_ID, value);
+    }
+
+    private void putRawString(String key, String value) throws Exception {
         Field prefsField = SessionManager.class.getDeclaredField("prefs");
         prefsField.setAccessible(true);
         SharedPreferences prefs = (SharedPreferences) prefsField.get(SessionManager.get());
-        prefs.edit().putString(Constants.KEY_DEVICE_ID, value).apply();
+        prefs.edit().putString(key, value).apply();
     }
 
     private static final class MemorySharedPreferences implements SharedPreferences {

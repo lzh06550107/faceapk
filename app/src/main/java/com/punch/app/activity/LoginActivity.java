@@ -35,6 +35,7 @@ public class LoginActivity extends AppCompatActivity {
     private EditText etAccount;
     private EditText etPassword;
     private Button btnLogin;
+    private Button btnEditSetup;
     private ProgressBar progress;
     private TextView tvError;
     private TextView tvProgressStatus;
@@ -49,6 +50,7 @@ public class LoginActivity extends AppCompatActivity {
         etAccount = findViewById(R.id.et_account);
         etPassword = findViewById(R.id.et_password);
         btnLogin = findViewById(R.id.btn_login);
+        btnEditSetup = findViewById(R.id.btn_edit_setup);
         progress = findViewById(R.id.progress);
         tvError = findViewById(R.id.tv_error);
         tvProgressStatus = findViewById(R.id.tv_progress_status);
@@ -58,6 +60,7 @@ public class LoginActivity extends AppCompatActivity {
         etAccount.setText(savedAccount.isEmpty() ? DEFAULT_ACCOUNT : savedAccount);
         etPassword.setText(savedPassword.isEmpty() ? DEFAULT_PASSWORD : savedPassword);
         btnLogin.setOnClickListener(v -> doLogin());
+        btnEditSetup.setOnClickListener(v -> openSetupWizard());
     }
 
     @Override
@@ -201,6 +204,11 @@ public class LoginActivity extends AppCompatActivity {
         });
     }
 
+    private void openSetupWizard() {
+        Intent intent = new Intent(this, SetupWizardActivity.class);
+        startActivity(intent);
+    }
+
     private void applyLoginState(String account,
                                  AuthDto.LoginData loginData,
                                  DeviceDto.DeviceConfigData configData) {
@@ -291,6 +299,7 @@ public class LoginActivity extends AppCompatActivity {
     private void setLoading(boolean loading, String message) {
         progress.setVisibility(loading ? View.VISIBLE : View.GONE);
         btnLogin.setEnabled(!loading);
+        btnEditSetup.setEnabled(!loading);
         etAccount.setEnabled(!loading);
         etPassword.setEnabled(!loading);
         tvError.setVisibility(View.GONE);

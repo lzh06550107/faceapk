@@ -480,6 +480,19 @@
                     app:strokeWidth="1dp" />
 
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_view_local_config"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginBottom="10dp"
+                    android:text="&#x67E5;&#x770B;&#x672C;&#x5730;&#x914D;&#x7F6E;"
+                    android:textAllCaps="false"
+                    android:textColor="@color/primary"
+                    app:backgroundTint="@color/white"
+                    app:cornerRadius="8dp"
+                    app:strokeColor="@color/primary"
+                    app:strokeWidth="1dp" />
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_view_local_employees"
                     android:layout_width="match_parent"
                     android:layout_height="44dp"

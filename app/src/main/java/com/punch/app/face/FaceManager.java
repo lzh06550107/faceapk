@@ -269,7 +269,7 @@ public class FaceManager {
             String livenessDetail = buildLivenessDetail(faceInfo, score, threshold);
             AppLogger.d(TAG, "RGB liveness check: " + livenessDetail);
             if (score < threshold) {
-                return RecognizeResult.fail(ERROR_LIVENESS_CHECK_FAILED);
+                return RecognizeResult.fail(ERROR_LIVENESS_CHECK_FAILED, livenessDetail);
             }
         }
 
@@ -446,13 +446,20 @@ public class FaceManager {
         public final float score;
         public final String errorMsg;
         public final RectF faceBounds;
+        public final String debugDetail;
 
-        private RecognizeResult(boolean matched, String empId, float score, String errorMsg, RectF faceBounds) {
+        private RecognizeResult(boolean matched,
+                                String empId,
+                                float score,
+                                String errorMsg,
+                                RectF faceBounds,
+                                String debugDetail) {
             this.matched = matched;
             this.empId = empId;
             this.score = score;
             this.errorMsg = errorMsg;
             this.faceBounds = faceBounds;
+            this.debugDetail = debugDetail == null ? "" : debugDetail;
         }
 
         public static RecognizeResult ok(String empId, float score) {
@@ -460,11 +467,15 @@ public class FaceManager {
         }
 
         public static RecognizeResult ok(String empId, float score, RectF faceBounds) {
-            return new RecognizeResult(true, empId, score, null, faceBounds);
+            return new RecognizeResult(true, empId, score, null, faceBounds, "");
         }
 
         public static RecognizeResult fail(String errorMsg) {
-            return new RecognizeResult(false, null, 0, errorMsg, null);
+            return fail(errorMsg, "");
+        }
+
+        public static RecognizeResult fail(String errorMsg, String debugDetail) {
+            return new RecognizeResult(false, null, 0, errorMsg, null, debugDetail);
         }
     }
 

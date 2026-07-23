@@ -170,9 +170,14 @@ public class SetupWizardActivity extends AppCompatActivity {
             return;
         }
 
-        SessionManager.get().saveBaseUrl(baseUrl);
-        SessionManager.get().saveCompanyId(companyId);
-        SessionManager.get().saveSetupCompleted(true);
+        SessionManager session = SessionManager.get();
+        boolean serverChanged = !baseUrl.equals(session.getBaseUrl()) || companyId != session.getCompanyId();
+        session.saveBaseUrl(baseUrl);
+        session.saveCompanyId(companyId);
+        if (serverChanged) {
+            session.clearServerBoundState();
+        }
+        session.saveSetupCompleted(true);
 
         Toast.makeText(this, "配置已保存", Toast.LENGTH_SHORT).show();
         Intent intent = new Intent(this, LoginActivity.class);
