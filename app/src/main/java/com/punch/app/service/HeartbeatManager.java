@@ -56,6 +56,10 @@ public final class HeartbeatManager {
     }
 
     public void triggerNow() {
+        triggerNow(false);
+    }
+
+    public void triggerNow(boolean forcePunchRetry) {
         if (!SessionManager.get().isTokenValid()) {
             AppLogger.d(TAG, "Skip triggerNow: token missing or expired");
             return;
@@ -64,9 +68,11 @@ public final class HeartbeatManager {
         InteractionLogger.logBusiness(
                 InteractionLogger.GROUP_HEARTBEAT,
                 "立即触发心跳同步",
-                "由应用主动触发一次心跳检查"
+                forcePunchRetry
+                        ? "由应用主动触发一次心跳检查，并允许重试历史打卡记录"
+                        : "由应用主动触发一次心跳检查"
         );
-        SyncCoordinator.get().enqueueHeartbeatCycle(appContext);
+        SyncCoordinator.get().enqueueHeartbeatCycle(appContext, forcePunchRetry);
     }
 
     public synchronized void stop() {

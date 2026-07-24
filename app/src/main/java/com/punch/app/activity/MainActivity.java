@@ -168,8 +168,8 @@ public class MainActivity extends AppCompatActivity {
         } else if (pending > 0 && SessionManager.get().isTokenValid()) {
             tvBanner.setVisibility(View.VISIBLE);
             tvBanner.setBackgroundColor(0xFFEF6C00);
-            tvBanner.setText("\u5f85\u540c\u6b65 " + pending + " \u6761\uff0c\u70b9\u51fb\u7acb\u5373\u540c\u6b65");
-            tvBanner.setOnClickListener(v -> SyncService.triggerSync(this));
+            tvBanner.setText("\u5f85\u540c\u6b65 " + pending + " \u6761\uff0c\u914d\u7f6e\u9875\u70b9\u51fb\u7acb\u5373\u540c\u6b65");
+            tvBanner.setOnClickListener(null);
         } else {
             tvBanner.setVisibility(View.GONE);
             tvBanner.setOnClickListener(null);

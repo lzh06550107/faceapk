@@ -243,7 +243,7 @@ public class ConfigFragment extends Fragment {
         executor.execute(() -> {
             ActivationManager.get().prepareActivation(requireContext(), (ready, failureMessage) -> {
             });
-            SyncService.triggerSync(requireContext());
+            SyncService.triggerSync(requireContext(), true);
             if (!isAdded()) {
                 return;
             }

@@ -682,6 +682,19 @@ public class SessionManager {
         prefs.edit().putInt(Constants.KEY_RECOGNITION_TIMEOUT_SECONDS, seconds).apply();
     }
 
+    public int getPunchTimeWindowMinutes() {
+        return prefs.getInt(
+                Constants.KEY_PUNCH_TIME_WINDOW_MINUTES,
+                Constants.DEFAULT_PUNCH_TIME_WINDOW_MINUTES
+        );
+    }
+
+    public void savePunchTimeWindowMinutes(int minutes) {
+        prefs.edit()
+                .putInt(Constants.KEY_PUNCH_TIME_WINDOW_MINUTES, Math.max(0, minutes))
+                .apply();
+    }
+
     public void saveActivationMode(String mode) {
         prefs.edit().putString(Constants.KEY_ACTIVATION_MODE, mode).apply();
     }

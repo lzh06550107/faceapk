@@ -11,11 +11,14 @@ import com.punch.app.utils.SessionManager;
 
 public class SyncService extends Service {
     public static final String ACTION_SYNC_NOW = "com.punch.app.SYNC_NOW";
+    public static final String EXTRA_FORCE_PUNCH_RETRY = "force_punch_retry";
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_SYNC_NOW.equals(intent.getAction())) {
-            HeartbeatManager.get(getApplicationContext()).triggerNow();
+            HeartbeatManager.get(getApplicationContext()).triggerNow(
+                    intent.getBooleanExtra(EXTRA_FORCE_PUNCH_RETRY, false)
+            );
         }
         return START_NOT_STICKY;
     }
@@ -27,6 +30,10 @@ public class SyncService extends Service {
     }
 
     public static void triggerSync(Context context) {
+        triggerSync(context, false);
+    }
+
+    public static void triggerSync(Context context, boolean forcePunchRetry) {
         if (!SessionManager.get().isTokenValid()) {
             return;
         }
@@ -34,6 +41,7 @@ public class SyncService extends Service {
         HeartbeatManager.get(appContext).start();
         Intent intent = new Intent(appContext, SyncService.class);
         intent.setAction(ACTION_SYNC_NOW);
+        intent.putExtra(EXTRA_FORCE_PUNCH_RETRY, forcePunchRetry);
         appContext.startService(intent);
     }
 }

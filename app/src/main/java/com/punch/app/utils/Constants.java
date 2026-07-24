@@ -47,6 +47,7 @@ public class Constants {
     public static final String KEY_RECOGNITION_DISTANCE_MODE = "recognition_distance_mode";
     public static final String KEY_MASK_DETECT = "mask_detect";
     public static final String KEY_RECOGNITION_TIMEOUT_SECONDS = "recognition_timeout_seconds";
+    public static final String KEY_PUNCH_TIME_WINDOW_MINUTES = "punch_time_window_minutes";
     public static final String KEY_CAMERA_FACING = "camera_facing";
     public static final String KEY_SOUND_ENABLED = "sound_enabled";
     public static final String KEY_ACTIVATION_MODE = "activation_mode";
@@ -95,6 +96,7 @@ public class Constants {
     public static final String DEFAULT_DISTANCE_MODE = DISTANCE_MODE_STANDARD;
     public static final boolean DEFAULT_MASK_DETECT = false;
     public static final int DEFAULT_RECOGNITION_TIMEOUT_SECONDS = 5;
+    public static final int DEFAULT_PUNCH_TIME_WINDOW_MINUTES = 20;
 
     public static final String ACTIVATION_MODE_ONLINE = "online";
     public static final String ACTIVATION_MODE_OFFLINE_ZIP = "offline_zip";

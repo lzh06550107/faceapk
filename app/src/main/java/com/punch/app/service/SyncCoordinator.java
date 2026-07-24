@@ -19,6 +19,7 @@ import com.punch.app.network.dto.HeartbeatDto;
 import com.punch.app.network.dto.PunchDto;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
+import com.punch.app.utils.PunchTimeResolver;
 import com.punch.app.utils.SessionManager;
 
 import java.util.ArrayList;
@@ -47,6 +48,7 @@ public final class SyncCoordinator {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean heartbeatQueued = new AtomicBoolean(false);
+    private final AtomicBoolean forcePunchRetryRequested = new AtomicBoolean(false);
 
     private SyncCoordinator() {
     }
@@ -59,16 +61,28 @@ public final class SyncCoordinator {
     }
 
     public void enqueueHeartbeatCycle(Context context) {
+        enqueueHeartbeatCycle(context, false);
+    }
+
+    public void enqueueHeartbeatCycle(Context context, boolean forcePunchRetry) {
         Context appContext = context.getApplicationContext();
+        if (forcePunchRetry) {
+            forcePunchRetryRequested.set(true);
+        }
         if (!heartbeatQueued.compareAndSet(false, true)) {
             AppLogger.d(TAG, "Heartbeat cycle already queued");
             return;
         }
         executor.execute(() -> {
             try {
-                runHeartbeatCycle(appContext);
+                do {
+                    runHeartbeatCycle(appContext, forcePunchRetryRequested.getAndSet(false));
+                } while (forcePunchRetryRequested.get());
             } finally {
                 heartbeatQueued.set(false);
+                if (forcePunchRetryRequested.get()) {
+                    enqueueHeartbeatCycle(appContext, false);
+                }
             }
         });
     }
@@ -94,7 +108,7 @@ public final class SyncCoordinator {
         return outcome.isUsable();
     }
 
-    private void runHeartbeatCycle(Context appContext) {
+    private void runHeartbeatCycle(Context appContext, boolean forcePunchRetry) {
         if (!SessionManager.get().isDeviceRegistered()) {
             AppLogger.d(TAG, "Skip sync: device not registered");
             return;
@@ -104,7 +118,7 @@ public final class SyncCoordinator {
             return;
         }
 
-        syncPunches(appContext);
+        syncPunches(appContext, forcePunchRetry);
 
         ApiResult<HeartbeatDto.HeartbeatData> heartbeat = ApiService.fetchHeartbeat(appContext);
         if (!heartbeat.success || heartbeat.data == null) {
@@ -206,8 +220,26 @@ public final class SyncCoordinator {
                 : EventProcessingOutcome.failure(result.failureMessage, result.employeeResults);
     }
 
-    private void syncPunches(Context context) {
+    private void syncPunches(Context context, boolean forcePunchRetry) {
         DatabaseHelper db = DatabaseHelper.get(context);
+        int repaired = db.repairPunchSyncQueue();
+        if (repaired > 0) {
+            InteractionLogger.logBusiness(
+                    InteractionLogger.GROUP_PUNCH,
+                    "补建打卡同步队列",
+                    "补建 " + repaired + " 条历史未同步打卡记录"
+            );
+        }
+        if (forcePunchRetry) {
+            int reset = db.resetPunchSyncRetriesForManualSync();
+            if (reset > 0) {
+                InteractionLogger.logBusiness(
+                        InteractionLogger.GROUP_PUNCH,
+                        "重置打卡同步重试次数",
+                        "手动立即同步，重试 " + reset + " 条已达上限的打卡记录"
+                );
+            }
+        }
         List<SyncQueueItem> queue = db.getSyncQueue(Constants.ACTION_PUNCH_PUSH);
         if (queue.isEmpty()) {
             return;
@@ -221,25 +253,84 @@ public final class SyncCoordinator {
 
         for (SyncQueueItem item : queue) {
             if (item.retryCount >= Constants.SYNC_MAX_RETRY) {
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_PUNCH,
+                        "跳过打卡记录上传",
+                        "record_id=" + safeString(item.recordId)
+                                + "\nreason=重试次数已达上限"
+                                + "\nretry_count=" + item.retryCount
+                );
                 continue;
             }
 
             PunchRecord punch = punchByClientId.get(item.recordId);
             if (punch == null) {
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_PUNCH,
+                        "移除无效打卡同步任务",
+                        "record_id=" + safeString(item.recordId)
+                                + "\nreason=未找到对应未同步打卡记录"
+                );
                 db.removeSyncQueueItem(item.id);
                 continue;
             }
 
+            InteractionLogger.logBusiness(
+                    InteractionLogger.GROUP_PUNCH,
+                    "开始上传打卡记录",
+                    buildPunchSyncLogDetail(punch, item.retryCount, "")
+            );
             ApiResult<PunchDto.PunchPushData> result = ApiService.pushPunch(punch);
             if (result.success) {
                 db.markPunchSynced(punch.id);
                 db.removeSyncQueueItem(item.id);
                 AppLogger.i(TAG, "Punch synced: " + punch.clientRecordId);
+                InteractionLogger.logBusiness(
+                        InteractionLogger.GROUP_PUNCH,
+                        "打卡记录上传成功",
+                        buildPunchSyncLogDetail(
+                                punch,
+                                item.retryCount,
+                                "server_record_id=" + (result.data == null ? "" : safeString(result.data.recordId))
+                        )
+                );
             } else {
                 db.incrementSyncRetry(item.id);
                 AppLogger.w(TAG, "Punch sync failed: " + result.message);
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_PUNCH,
+                        "打卡记录上传失败",
+                        buildPunchSyncLogDetail(
+                                punch,
+                                item.retryCount + 1,
+                                "code=" + result.code + "\nreason=" + safeString(result.message)
+                        )
+                );
             }
         }
+    }
+
+    private String buildPunchSyncLogDetail(PunchRecord punch, int retryCount, String extra) {
+        if (punch == null) {
+            return safeString(extra);
+        }
+        StringBuilder builder = new StringBuilder();
+        builder.append("record_id=").append(safeString(punch.id));
+        builder.append("\nclient_record_id=").append(safeString(punch.clientRecordId));
+        builder.append("\nnumbers=").append(safeString(punch.empId));
+        builder.append("\nteam_binding=").append(punch.teamBindingId);
+        builder.append("\nline_binding_code=").append(safeString(punch.lineCode));
+        builder.append("\nsnap_time=").append(punch.punchTime);
+        builder.append("\npunch_type=").append(safeString(punch.punchType));
+        builder.append("\nclock_index=").append(punch.clockIndex);
+        builder.append("\nmatch_score=").append(punch.matchScore);
+        builder.append("\nretry_count=").append(retryCount);
+        builder.append("\nhas_snap_image=").append(!isBlank(punch.snapImagePath) && punch.snapImageSize > 0);
+        builder.append("\nsnap_image_size=").append(punch.snapImageSize);
+        if (!isBlank(extra)) {
+            builder.append("\n").append(extra.trim());
+        }
+        return builder.toString();
     }
 
     private boolean syncDeviceConfig(Context context) {
@@ -270,6 +361,7 @@ public final class SyncCoordinator {
         if (app != null) {
             app.reportStatusEvent("\u8bbe\u5907\u914d\u7f6e\u5df2\u66f4\u65b0", PunchApplication.STATUS_LEVEL_SUCCESS);
         }
+        validatePunchWindowConfigAfterSync(app);
         if (FaceManager.get().isInitialized()) {
             FaceManager.get().refreshRuntimeConfig();
         }
@@ -279,6 +371,27 @@ public final class SyncCoordinator {
                 "本地配置已更新"
         );
         return true;
+    }
+
+    private void validatePunchWindowConfigAfterSync(PunchApplication app) {
+        PunchTimeResolver.WindowValidationResult validation =
+                PunchTimeResolver.validatePunchTimeWindows(
+                        SessionManager.get().getCurrentTeamTimeRanges(),
+                        SessionManager.get().getPunchTimeWindowMinutes()
+                );
+        if (validation.valid) {
+            return;
+        }
+        String message = validation.buildMessage();
+        AppLogger.w(TAG, "Punch time window conflict: " + message);
+        InteractionLogger.logBusinessFailure(
+                InteractionLogger.GROUP_DEVICE_CONFIG,
+                "打卡时间范围配置冲突",
+                message
+        );
+        if (app != null) {
+            app.reportStatusEvent(message, PunchApplication.STATUS_LEVEL_ERROR);
+        }
     }
 
     private void applyDeviceConfig(DeviceDto.DeviceConfigData data, boolean preserveLocalBindings) {

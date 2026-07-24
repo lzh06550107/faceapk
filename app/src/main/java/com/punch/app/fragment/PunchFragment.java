@@ -1,6 +1,8 @@
 package com.punch.app.fragment;
 
 import android.Manifest;
+import android.app.AlertDialog;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
@@ -21,6 +23,7 @@ import android.text.style.StyleSpan;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
@@ -109,7 +112,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     // Camera
     private Camera camera;
     private int cameraId = -1;
-    private int cameraFacing = Camera.CameraInfo.CAMERA_FACING_FRONT;
+    private int cameraFacing = Camera.CameraInfo.CAMERA_FACING_BACK;
     private int frameRotation = 0;
     private int frameMirror = 0;
     private int previewWidth = 0;
@@ -158,6 +161,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private boolean punchActive = false;
     private boolean waitingFirstPreviewFrame = false;
     private boolean statusHistoryExpanded = false;
+    private boolean ambiguousPunchSelectionPending = false;
+    private boolean userChangingPunchSelection = false;
     private ArrayAdapter<String> punchOptionAdapter;
     private final PunchApplication.PunchStatusListener punchStatusListener = this::renderPunchStatusSnapshot;
     private final Runnable hideStatusPanelRunnable = this::fadeOutStatusPanel;
@@ -213,20 +218,28 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
         refreshBindingHeader();
 
-                punchOptionAdapter = new ArrayAdapter<>(
-                requireContext(),
-                android.R.layout.simple_spinner_dropdown_item,
-                punchOptions
-        );
+        punchOptionAdapter = new PunchOptionAdapter(requireContext(), punchOptions);
         spinnerShift.setAdapter(punchOptionAdapter);
+        spinnerShift.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                userChangingPunchSelection = true;
+            }
+            return false;
+        });
         spinnerShift.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View itemView, int position, long id) {
+                if (userChangingPunchSelection) {
+                    ambiguousPunchSelectionPending = false;
+                    userChangingPunchSelection = false;
+                }
                 updatePunchTypeFromSelection();
             }
 
             @Override
-            public void onNothingSelected(AdapterView<?> parent) {}
+            public void onNothingSelected(AdapterView<?> parent) {
+                userChangingPunchSelection = false;
+            }
         });
         switchSpecialTime.setOnCheckedChangeListener((buttonView, isChecked) -> specialTimeEnabled = isChecked);
 
@@ -429,17 +442,17 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     }
 
     private int resolveInitialCameraFacing() {
-        int savedFacing = SessionManager.get().getCameraFacing(Camera.CameraInfo.CAMERA_FACING_FRONT);
+        int savedFacing = SessionManager.get().getCameraFacing(Integer.MIN_VALUE);
         if (findCameraId(savedFacing) >= 0) {
             return savedFacing;
-        }
-        if (findCameraId(Camera.CameraInfo.CAMERA_FACING_FRONT) >= 0) {
-            return Camera.CameraInfo.CAMERA_FACING_FRONT;
         }
         if (findCameraId(Camera.CameraInfo.CAMERA_FACING_BACK) >= 0) {
             return Camera.CameraInfo.CAMERA_FACING_BACK;
         }
-        return Camera.CameraInfo.CAMERA_FACING_FRONT;
+        if (findCameraId(Camera.CameraInfo.CAMERA_FACING_FRONT) >= 0) {
+            return Camera.CameraInfo.CAMERA_FACING_FRONT;
+        }
+        return Camera.CameraInfo.CAMERA_FACING_BACK;
     }
 
     private int findCameraId(int facing) {
@@ -1525,6 +1538,106 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         return FREE_PUNCH_OPTION_LABEL.equals(getSelectedPunchOptionLabel());
     }
 
+    private List<Integer> getAllowedPunchOptionIndexesNow() {
+        return PunchTimeResolver.findAllowedPunchOptionIndexes(
+                punchOptions,
+                System.currentTimeMillis(),
+                SessionManager.get().getPunchTimeWindowMinutes()
+        );
+    }
+
+    private boolean isSelectedPunchOptionWithinAllowedTime() {
+        if (isSelectedFreePunch()) {
+            return true;
+        }
+        return PunchTimeResolver.isWithinAllowedPunchTime(
+                getSelectedPunchOptionLabel(),
+                System.currentTimeMillis(),
+                SessionManager.get().getPunchTimeWindowMinutes()
+        );
+    }
+
+    private void showOutOfPunchTimeRangeDialog(@Nullable PunchSnapshotHelper.Snapshot snapshot) {
+        if (snapshot != null) {
+            PunchSnapshotHelper.deleteSnapshot(snapshot.path);
+        }
+        resetRecognitionAttempt();
+        resetPendingMatch();
+        if (!isAdded()) {
+            recognizing = false;
+            return;
+        }
+        setStatus("\u5f53\u524d\u6253\u5361\u4e0d\u5728\u6253\u5361\u65f6\u95f4\u8303\u56f4");
+        playForbiddenFeedback("\u5f53\u524d\u6253\u5361\u4e0d\u5728\u6253\u5361\u65f6\u95f4\u8303\u56f4");
+        final boolean[] autoSelected = {false};
+        final int[] selectedIndex = {-1};
+        AlertDialog.Builder builder = new AlertDialog.Builder(requireContext())
+                .setTitle("\u65e0\u6cd5\u6253\u5361")
+                .setMessage("\u5f53\u524d\u6253\u5361\u4e0d\u5728\u6253\u5361\u65f6\u95f4\u8303\u56f4")
+                .setPositiveButton("\u786e\u5b9a", null)
+                .setOnDismissListener(dialog -> {
+                    recognizing = false;
+                    if (autoSelected[0]) {
+                        setStatus("\u5df2\u81ea\u52a8\u9009\u62e9\uff1a" + getPunchOptionLabel(selectedIndex[0]));
+                    } else {
+                        updateIdleStatus();
+                    }
+                });
+        int autoSelectableIndex = resolveUniqueAllowedPunchOptionIndex();
+        if (autoSelectableIndex >= 0) {
+            builder.setNegativeButton("\u81ea\u52a8\u9009\u62e9", (dialog, which) -> {
+                autoSelected[0] = true;
+                selectedIndex[0] = autoSelectableIndex;
+                spinnerShift.setSelection(autoSelectableIndex);
+                ambiguousPunchSelectionPending = false;
+            });
+        }
+        builder.show();
+    }
+
+    private int resolveUniqueAllowedPunchOptionIndex() {
+        List<Integer> allowedIndexes = getAllowedPunchOptionIndexesNow();
+        if (allowedIndexes.size() != 1) {
+            return -1;
+        }
+        int index = allowedIndexes.get(0);
+        if (spinnerShift != null && spinnerShift.getSelectedItemPosition() == index) {
+            return -1;
+        }
+        return index;
+    }
+
+    private String getPunchOptionLabel(int position) {
+        if (position < 0 || position >= punchOptions.size()) {
+            return "";
+        }
+        String label = punchOptions.get(position);
+        return label == null ? "" : label;
+    }
+
+    private void showAmbiguousPunchOptionDialog(@Nullable PunchSnapshotHelper.Snapshot snapshot) {
+        if (snapshot != null) {
+            PunchSnapshotHelper.deleteSnapshot(snapshot.path);
+        }
+        resetRecognitionAttempt();
+        resetPendingMatch();
+        if (!isAdded()) {
+            recognizing = false;
+            return;
+        }
+        setStatus("\u5f53\u524d\u65f6\u95f4\u547d\u4e2d\u591a\u4e2a\u6253\u5361\u9879\uff0c\u8bf7\u624b\u52a8\u9009\u62e9");
+        playForbiddenFeedback("\u5f53\u524d\u65f6\u95f4\u547d\u4e2d\u591a\u4e2a\u6253\u5361\u9879\uff0c\u8bf7\u624b\u52a8\u9009\u62e9");
+        new AlertDialog.Builder(requireContext())
+                .setTitle("\u8bf7\u624b\u52a8\u9009\u62e9\u6253\u5361\u9879")
+                .setMessage("\u5f53\u524d\u65f6\u95f4\u547d\u4e2d\u591a\u4e2a\u6253\u5361\u9879\uff0c\u8bf7\u624b\u52a8\u9009\u62e9")
+                .setPositiveButton("\u786e\u5b9a", null)
+                .setOnDismissListener(dialog -> {
+                    recognizing = false;
+                    updateIdleStatus();
+                })
+                .show();
+    }
+
     private int getSelectedClockIndex() {
         if (spinnerShift == null) {
             return FREE_PUNCH_OPTION_VALUE;
@@ -1546,9 +1659,10 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     
     private long resolveScheduledPunchTimeSeconds(String optionLabel) {
-        return PunchTimeResolver.resolveScheduledPunchTimeSeconds(
+        return PunchTimeResolver.resolveAllowedPunchTimeSeconds(
                 optionLabel,
-                System.currentTimeMillis()
+                System.currentTimeMillis(),
+                SessionManager.get().getPunchTimeWindowMinutes()
         );
     }
 
@@ -1607,6 +1721,16 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         String shiftLabel = getSelectedPunchOptionLabel();
         long punchTime = resolvePunchTimeSeconds();
         String punchDate = buildPunchDate(punchTime);
+
+        if (ambiguousPunchSelectionPending) {
+            showAmbiguousPunchOptionDialog(snapshot);
+            return;
+        }
+
+        if (!isSelectedPunchOptionWithinAllowedTime()) {
+            showOutOfPunchTimeRangeDialog(snapshot);
+            return;
+        }
 
         if (isForbiddenStatus(status)) {
             showForbiddenPunchDialog(emp, status);
@@ -1718,17 +1842,75 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             boolean synced = false;
             boolean online = ApiService.isBackendAvailable();
             if (online) {
+                InteractionLogger.logBusiness(
+                        InteractionLogger.GROUP_PUNCH,
+                        "开始实时上传打卡记录",
+                        buildPunchSyncLogDetail(record, "")
+                );
                 ApiResult<PunchDto.PunchPushData> result = ApiService.pushPunch(record);
                 if (result.success) {
                     DatabaseHelper.get(requireContext()).markPunchSynced(record.id);
                     DatabaseHelper.get(requireContext()).removeSyncQueueItem(
                             getQueueId(Constants.ACTION_PUNCH_PUSH, record.clientRecordId));
                     synced = true;
+                    InteractionLogger.logBusiness(
+                            InteractionLogger.GROUP_PUNCH,
+                            "实时打卡记录上传成功",
+                            buildPunchSyncLogDetail(
+                                    record,
+                                    "server_record_id=" + (result.data == null ? "" : safeString(result.data.recordId))
+                            )
+                    );
+                } else {
+                    InteractionLogger.logBusinessFailure(
+                            InteractionLogger.GROUP_PUNCH,
+                            "实时打卡记录上传失败",
+                            buildPunchSyncLogDetail(
+                                    record,
+                                    "code=" + result.code + "\nreason=" + safeString(result.message)
+                            )
+                    );
                 }
+            } else {
+                InteractionLogger.logBusinessFailure(
+                        InteractionLogger.GROUP_PUNCH,
+                        "实时打卡记录暂未上传",
+                        buildPunchSyncLogDetail(record, "reason=后端服务不可用")
+                );
             }
             final boolean finalSynced = synced;
             uiHandler.post(() -> showPunchResult(record, finalSynced));
         });
+    }
+
+    private String buildPunchSyncLogDetail(PunchRecord record, String extra) {
+        if (record == null) {
+            return safeString(extra);
+        }
+        StringBuilder builder = new StringBuilder();
+        builder.append("record_id=").append(safeString(record.id));
+        builder.append("\nclient_record_id=").append(safeString(record.clientRecordId));
+        builder.append("\nnumbers=").append(safeString(record.empId));
+        builder.append("\nteam_binding=").append(record.teamBindingId);
+        builder.append("\nline_binding_code=").append(safeString(record.lineCode));
+        builder.append("\nsnap_time=").append(record.punchTime);
+        builder.append("\npunch_type=").append(safeString(record.punchType));
+        builder.append("\nclock_index=").append(record.clockIndex);
+        builder.append("\nmatch_score=").append(record.matchScore);
+        builder.append("\nhas_snap_image=").append(!isBlank(record.snapImagePath) && record.snapImageSize > 0);
+        builder.append("\nsnap_image_size=").append(record.snapImageSize);
+        if (!isBlank(extra)) {
+            builder.append("\n").append(extra.trim());
+        }
+        return builder.toString();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private String safeString(String value) {
+        return value == null ? "" : value;
     }
 
     
@@ -2080,6 +2262,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
         Object selectedItem = spinnerShift.getSelectedItem();
         String currentSelection = selectedItem != null ? selectedItem.toString() : null;
+        ambiguousPunchSelectionPending = false;
+        userChangingPunchSelection = false;
         punchOptions.clear();
         for (String timeRange : SessionManager.get().getCurrentTeamTimeRanges()) {
             if (timeRange == null) {
@@ -2094,9 +2278,33 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
         punchOptions.add(FREE_PUNCH_OPTION_LABEL);
         punchOptionAdapter.notifyDataSetChanged();
+        PunchTimeResolver.WindowValidationResult windowValidation =
+                PunchTimeResolver.validatePunchTimeWindows(
+                        SessionManager.get().getCurrentTeamTimeRanges(),
+                        SessionManager.get().getPunchTimeWindowMinutes()
+                );
+        List<Integer> allowedIndexes = windowValidation.valid
+                ? getAllowedPunchOptionIndexesNow()
+                : new ArrayList<>();
         int selectedIndex = currentSelection != null ? punchOptions.indexOf(currentSelection) : -1;
+        int freeIndex = punchOptions.indexOf(FREE_PUNCH_OPTION_LABEL);
+        if (!windowValidation.valid && selectedIndex < 0) {
+            selectedIndex = freeIndex;
+            setStatus(windowValidation.buildMessage());
+        } else if (selectedIndex < 0) {
+            if (allowedIndexes.size() == 1) {
+                selectedIndex = allowedIndexes.get(0);
+            } else if (allowedIndexes.size() > 1) {
+                ambiguousPunchSelectionPending = true;
+                selectedIndex = freeIndex;
+                setStatus("\u5f53\u524d\u65f6\u95f4\u547d\u4e2d\u591a\u4e2a\u6253\u5361\u9879\uff0c\u8bf7\u624b\u52a8\u9009\u62e9");
+            }
+        }
         if (selectedIndex < 0) {
-            selectedIndex = punchOptions.size() > 1 ? 0 : punchOptions.indexOf(FREE_PUNCH_OPTION_LABEL);
+            selectedIndex = freeIndex;
+        }
+        if (selectedIndex < 0) {
+            selectedIndex = punchOptions.size() > 1 ? 0 : freeIndex;
         }
         if (selectedIndex < 0) {
             selectedIndex = 0;
@@ -2104,7 +2312,68 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         spinnerShift.setSelection(selectedIndex);
         updatePunchTypeFromSelection();
     }
+
+    private final class PunchOptionAdapter extends ArrayAdapter<String> {
+        PunchOptionAdapter(Context context, List<String> options) {
+            super(context, android.R.layout.simple_spinner_dropdown_item, options);
+        }
+
+        @NonNull
+        @Override
+        public View getView(int position, @Nullable View convertView, @NonNull ViewGroup parent) {
+            View view = super.getView(position, convertView, parent);
+            bindOptionView(view, getItem(position), false);
+            return view;
+        }
+
+        @Override
+        public View getDropDownView(int position, @Nullable View convertView, @NonNull ViewGroup parent) {
+            View view = super.getDropDownView(position, convertView, parent);
+            bindOptionView(view, getItem(position), true);
+            return view;
+        }
+
+        private void bindOptionView(View view, @Nullable String label, boolean dropdown) {
+            if (!(view instanceof TextView)) {
+                return;
+            }
+            TextView textView = (TextView) view;
+            textView.setTextColor(resolvePunchOptionTextColor(label));
+            textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, dropdown ? 15 : 14);
+            textView.setTypeface(null, dropdown ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+            int horizontalPadding = dpInt(dropdown ? 14 : 8);
+            int verticalPadding = dpInt(dropdown ? 10 : 4);
+            textView.setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding);
+            GradientDrawable background = new GradientDrawable();
+            background.setColor(resolvePunchOptionBackgroundColor(label, dropdown));
+            background.setCornerRadius(0f);
+            textView.setBackground(background);
+        }
+    }
+
+    private int resolvePunchOptionTextColor(@Nullable String label) {
+        if (FREE_PUNCH_OPTION_LABEL.equals(label)) {
+            return 0xFFFFFFFF;
+        }
+        if (label != null && label.endsWith("\u4e0a\u73ed")) {
+            return 0xFFFFFFFF;
+        }
+        if (label != null && label.endsWith("\u4e0b\u73ed")) {
+            return 0xFFFFFFFF;
+        }
+        return 0xFF1D1D1F;
+    }
+
+    private int resolvePunchOptionBackgroundColor(@Nullable String label, boolean dropdown) {
+        if (FREE_PUNCH_OPTION_LABEL.equals(label)) {
+            return dropdown ? 0xFFB71C1C : 0xFFC62828;
+        }
+        if (label != null && label.endsWith("\u4e0a\u73ed")) {
+            return dropdown ? 0xFF1B7A3A : 0xFF2E7D32;
+        }
+        if (label != null && label.endsWith("\u4e0b\u73ed")) {
+            return dropdown ? 0xFF0B4F8C : 0xFF0D5FA8;
+        }
+        return dropdown ? 0xFFF6F8FB : 0xFFEFF3F7;
+    }
 }
-
-
-

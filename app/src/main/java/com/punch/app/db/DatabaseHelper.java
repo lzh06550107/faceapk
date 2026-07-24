@@ -23,19 +23,19 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     private static DatabaseHelper instance;
     private final Context appContext;
 
-    
+
     public static synchronized DatabaseHelper get(Context ctx) {
         if (instance == null) instance = new DatabaseHelper(ctx.getApplicationContext());
         return instance;
     }
 
-    
+
     private DatabaseHelper(Context context) {
         super(context, Constants.DB_NAME, null, Constants.DB_VERSION);
         this.appContext = context.getApplicationContext();
     }
 
-    
+
     @Override
     public void onCreate(SQLiteDatabase db) {
         // 员工表：保存员工基本信息、人脸图片信息、所属线体以及本地注册状态。
@@ -64,7 +64,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         createPunchRecordIndexes(db);
     }
 
-    
+
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 3) {
@@ -89,7 +89,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         }
     }
 
-    
+
     public void upsertEmployee(Employee e) {
         ContentValues v = new ContentValues();
         v.put("id", e.id); v.put("name", e.name); v.put("dept", e.dept);
@@ -104,7 +104,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         getWritableDatabase().insertWithOnConflict("employees", null, v, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
-    
+
     public void upsertEmployees(List<Employee> list) {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
@@ -126,7 +126,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         } finally { db.endTransaction(); }
     }
 
-    
+
     public Employee getEmployee(String id) {
         Cursor c = getReadableDatabase().rawQuery(
                 "SELECT * FROM employees WHERE id=?", new String[]{id});
@@ -134,7 +134,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         finally { c.close(); }
     }
 
-    
+
     public List<Employee> getAllActiveEmployees() {
         return queryEmployees("is_deleted=0 AND face_status='enabled'", null);
     }
@@ -165,7 +165,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         }
     }
 
-    
+
     public Map<String, String> getAvailableLines() {
         Map<String, String> lines = new LinkedHashMap<>();
         Cursor c = getReadableDatabase().rawQuery(
@@ -185,19 +185,19 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return lines;
     }
 
-    
+
     public List<Employee> getEmployeesByLine(String lineCode) {
         return queryEmployees("assigned_line_code=? AND is_deleted=0", new String[]{lineCode});
     }
 
-    
+
     public List<Employee> getUnregisteredFaces() {
         return queryEmployees(
                 "face_registered=0 AND is_deleted=0 AND face_status='enabled' AND face_image_url IS NOT NULL",
                 null);
     }
 
-    
+
     public void updateFaceRegistration(String empId, String localFaceId, boolean registered) {
         ContentValues v = new ContentValues();
         v.put("local_face_id", localFaceId);
@@ -205,7 +205,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         getWritableDatabase().update("employees", v, "id=?", new String[]{empId});
     }
 
-    
+
     public void updateEmployeeLineAssignment(String empId, String lineCode, String lineName) {
         ContentValues v = new ContentValues();
         v.put("assigned_line_code", lineCode);
@@ -213,7 +213,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         getWritableDatabase().update("employees", v, "id=?", new String[]{empId});
     }
 
-    
+
     public void markEmployeesDeleted(List<String> ids) {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
@@ -247,7 +247,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         getWritableDatabase().delete("employees", null, null);
     }
 
-    
+
     private List<Employee> queryEmployees(String where, String[] args) {
         List<Employee> list = new ArrayList<>();
         Cursor c = getReadableDatabase().rawQuery(
@@ -257,7 +257,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return list;
     }
 
-    
+
     private Employee mapEmployee(Cursor c) {
         Employee e = new Employee();
         e.id = c.getString(c.getColumnIndexOrThrow("id"));
@@ -278,7 +278,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return e;
     }
 
-    
+
     public boolean insertPunchRecord(PunchRecord r) {
         ContentValues v = new ContentValues();
         v.put("id", r.id); v.put("client_record_id", r.clientRecordId);
@@ -300,7 +300,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return result != -1;
     }
 
-    
+
     public List<PunchRecord> getPunchRecordsByDate(String date, String lineCode) {
         List<PunchRecord> list = new ArrayList<>();
         Cursor c = getReadableDatabase().rawQuery(
@@ -311,7 +311,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return list;
     }
 
-    
+
     public List<PunchRecord> getUnsyncedPunchRecords() {
         List<PunchRecord> list = new ArrayList<>();
         Cursor c = getReadableDatabase().rawQuery(
@@ -321,14 +321,14 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return list;
     }
 
-    
+
     public void markPunchSynced(String id) {
         ContentValues v = new ContentValues();
         v.put("is_synced", 1);
         getWritableDatabase().update("punch_records", v, "id=?", new String[]{id});
     }
 
-    
+
     private PunchRecord mapPunch(Cursor c) {
         PunchRecord r = new PunchRecord();
         r.id = c.getString(c.getColumnIndexOrThrow("id"));
@@ -354,7 +354,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return r;
     }
 
-    
+
     public void enqueueSyncItem(String recordId, String action) {
         ContentValues v = new ContentValues();
         v.put("record_id", recordId); v.put("action", action);
@@ -363,7 +363,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 SQLiteDatabase.CONFLICT_IGNORE);
     }
 
-    
+
     public List<SyncQueueItem> getSyncQueue(String action) {
         List<SyncQueueItem> list = new ArrayList<>();
         String where = action != null ? " WHERE action=?" : "";
@@ -385,26 +385,92 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return list;
     }
 
-    
+
     public void removeSyncQueueItem(int id) {
         getWritableDatabase().delete("sync_queue", "id=?", new String[]{String.valueOf(id)});
     }
 
-    
+
     public void incrementSyncRetry(int id) {
         getWritableDatabase().execSQL(
                 "UPDATE sync_queue SET retry_count=retry_count+1, last_retry=? WHERE id=?",
                 new Object[]{System.currentTimeMillis() / 1000, id});
     }
 
-    
+
+    public int repairPunchSyncQueue() {
+        int missingCount = countMissingPunchSyncQueueItems();
+        if (missingCount <= 0) {
+            return 0;
+        }
+        getWritableDatabase().execSQL(
+                "INSERT OR IGNORE INTO sync_queue (record_id, action, retry_count, created_at, last_retry) " +
+                        "SELECT client_record_id, ?, 0, ?, NULL FROM punch_records " +
+                        "WHERE is_synced=0 AND client_record_id IS NOT NULL AND TRIM(client_record_id)<>''",
+                new Object[]{Constants.ACTION_PUNCH_PUSH, System.currentTimeMillis() / 1000});
+        return missingCount;
+    }
+
+
+    public int resetPunchSyncRetriesForManualSync() {
+        int resetCount = countLimitedPunchSyncQueueItems();
+        if (resetCount <= 0) {
+            return 0;
+        }
+        getWritableDatabase().execSQL(
+                "UPDATE sync_queue SET retry_count=0, last_retry=NULL " +
+                        "WHERE action=? AND retry_count>=? AND EXISTS (" +
+                        "SELECT 1 FROM punch_records p " +
+                        "WHERE p.client_record_id=sync_queue.record_id AND p.is_synced=0)",
+                new Object[]{Constants.ACTION_PUNCH_PUSH, Constants.SYNC_MAX_RETRY});
+        return resetCount;
+    }
+
+
     public int getPendingCount() {
-        Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM sync_queue", null);
+        return getUnsyncedPunchCount() + getOtherPendingQueueCount();
+    }
+
+    private int getUnsyncedPunchCount() {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM punch_records WHERE is_synced=0", null);
         try { return c.moveToFirst() ? c.getInt(0) : 0; }
         finally { c.close(); }
     }
 
-    
+    private int getOtherPendingQueueCount() {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM sync_queue WHERE action<>?",
+                new String[]{Constants.ACTION_PUNCH_PUSH});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; }
+        finally { c.close(); }
+    }
+
+    private int countMissingPunchSyncQueueItems() {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM punch_records p " +
+                        "WHERE p.is_synced=0 " +
+                        "AND p.client_record_id IS NOT NULL AND TRIM(p.client_record_id)<>'' " +
+                        "AND NOT EXISTS (" +
+                        "SELECT 1 FROM sync_queue q " +
+                        "WHERE q.action=? AND q.record_id=p.client_record_id)",
+                new String[]{Constants.ACTION_PUNCH_PUSH});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; }
+        finally { c.close(); }
+    }
+
+    private int countLimitedPunchSyncQueueItems() {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM sync_queue q " +
+                        "WHERE q.action=? AND q.retry_count>=? AND EXISTS (" +
+                        "SELECT 1 FROM punch_records p " +
+                        "WHERE p.client_record_id=q.record_id AND p.is_synced=0)",
+                new String[]{Constants.ACTION_PUNCH_PUSH, String.valueOf(Constants.SYNC_MAX_RETRY)});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; }
+        finally { c.close(); }
+    }
+
+
     public List<String> getSignedEmpIds(String date, String lineCode, int teamBindingId, int clockIndex) {
         List<String> ids = new ArrayList<>();
         Cursor c = getReadableDatabase().rawQuery(
@@ -438,7 +504,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 "ON punch_records(punch_date, line_code, team_binding_id, clock_index, emp_id)");
     }
 
-    
+
     public void clearLocalBusinessData() {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();

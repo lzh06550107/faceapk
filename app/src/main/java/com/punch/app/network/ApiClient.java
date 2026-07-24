@@ -326,7 +326,7 @@ public class ApiClient {
         if (rawBody == null || rawBody.trim().isEmpty()) {
             return "";
         }
-        if (!ApiEndpoints.PUNCH.equals(path)) {
+        if (path == null || !path.contains(ApiEndpoints.PUNCH)) {
             return rawBody;
         }
         JsonObject obj = parseJsonObject(rawBody);
