@@ -83,9 +83,11 @@ public final class SyncCoordinator {
             AppLogger.w(TAG, "Cannot rebuild face library: face SDK is not ready");
             return false;
         }
-        FaceManager.get().rebuildFaceLibrary(appContext);
         FaceRegistrationOutcome outcome = waitForFaceRegistration(appContext);
         PunchApplication app = PunchApplication.get();
+        if (!rebuildFinalFaceLibrary(appContext, app)) {
+            return false;
+        }
         if (app != null) {
             publishPreparationOutcome(app, outcome);
         }
@@ -468,12 +470,11 @@ public final class SyncCoordinator {
         }
 
         if (app != null) {
-            app.updatePunchDataPreparationStatus("\u6b63\u5728\u91cd\u5efa\u4eba\u8138\u5e93...");
+            app.updatePunchDataPreparationStatus("\u6b63\u5728\u4e0b\u8f7d\u5e76\u6821\u9a8c\u4eba\u8138\u56fe\u7247...");
         }
-        FaceManager.get().rebuildFaceLibrary(context);
         InteractionLogger.logBusiness(
                 InteractionLogger.GROUP_EMPLOYEE_SYNC,
-                "开始重建本地人脸库",
+                "开始下载并校验人脸图片",
                 collectEventResults ? "仅处理本次事件涉及的人员" : "处理当前全部待注册人员"
         );
         if (collectEventResults) {
@@ -503,6 +504,12 @@ public final class SyncCoordinator {
                         toEmployeeResultList(employeeResults)
                 );
             }
+            if (!rebuildFinalFaceLibrary(context, app)) {
+                return EmployeeSyncProcessingResult.failure(
+                        STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED,
+                        toEmployeeResultList(employeeResults)
+                );
+            }
             if (app != null) {
                 publishPreparationOutcome(app, registrationOutcome);
             }
@@ -515,6 +522,9 @@ public final class SyncCoordinator {
         }
 
         FaceRegistrationOutcome registrationOutcome = waitForFaceRegistration(context);
+        if (!rebuildFinalFaceLibrary(context, app)) {
+            return EmployeeSyncProcessingResult.failure(STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED, new ArrayList<>());
+        }
         boolean ready = registrationOutcome.isUsable();
         if (app != null) {
             publishPreparationOutcome(app, registrationOutcome);
@@ -570,6 +580,24 @@ public final class SyncCoordinator {
         return waitForFaceRegistration(context, null);
     }
 
+    private boolean rebuildFinalFaceLibrary(Context context, PunchApplication app) {
+        if (app != null) {
+            app.updatePunchDataPreparationStatus("\u6b63\u5728\u91cd\u5efa\u4eba\u8138\u5e93...");
+        }
+        boolean success = FaceManager.get().rebuildFaceLibrarySync(context);
+        if (!success) {
+            if (app != null) {
+                app.markPunchRecognitionFailed(STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED);
+            }
+            InteractionLogger.logBusinessFailure(
+                    InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                    "人脸库最终重建失败",
+                    STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED
+            );
+        }
+        return success;
+    }
+
     private FaceRegistrationOutcome waitForFaceRegistration(Context context, List<Employee> employees) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<List<FaceRegistrationManager.RegistrationResult>> holder =
@@ -580,13 +608,13 @@ public final class SyncCoordinator {
             latch.countDown();
         };
         if (employees == null) {
-            FaceRegistrationManager.get().registerEmployees(
+            FaceRegistrationManager.get().validateEmployeesForRebuild(
                     context,
                     DatabaseHelper.get(context).getUnregisteredFaces(),
                     callback
             );
         } else {
-            FaceRegistrationManager.get().registerEmployees(context, employees, callback);
+            FaceRegistrationManager.get().validateEmployeesForRebuild(context, employees, callback);
         }
 
         try {
@@ -869,5 +897,3 @@ public final class SyncCoordinator {
         }
     }
 }
-
-

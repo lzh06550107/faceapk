@@ -57,6 +57,7 @@ public class FaceManager {
     private final Map<String, Integer> empToIntId = new HashMap<>();
     private final Map<Integer, String> intToEmpId = new HashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final Object faceLibraryLock = new Object();
 
     public void init(Context context, String licenseFileName, final InitCallback callback) {
         appContext = context.getApplicationContext();
@@ -104,16 +105,20 @@ public class FaceManager {
     }
 
     public void rebuildFaceLibrary(Context context) {
-        executor.execute(() -> {
-            if (!initialized) {
-                return;
-            }
+        executor.execute(() -> rebuildFaceLibrarySync(context));
+    }
 
-            FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
-            if (faceSearch == null) {
-                return;
-            }
+    public boolean rebuildFaceLibrarySync(Context context) {
+        if (!initialized) {
+            return false;
+        }
 
+        FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
+        if (faceSearch == null) {
+            return false;
+        }
+
+        synchronized (faceLibraryLock) {
             faceSearch.featureClear();
             empToIntId.clear();
             intToEmpId.clear();
@@ -134,16 +139,25 @@ public class FaceManager {
                 }
             }
             Log.i(TAG, "rebuildFaceLibrary: " + count + " faces loaded");
-        });
+        }
+        return true;
     }
 
     public RegisterResult registerFace(Context context, String empId, String imageFilePath) {
+        return registerFaceInternal(empId, imageFilePath, true);
+    }
+
+    public RegisterResult validateFaceImage(Context context, String empId, String imageFilePath) {
+        return registerFaceInternal(empId, imageFilePath, false);
+    }
+
+    private RegisterResult registerFaceInternal(String empId, String imageFilePath, boolean addToRuntimeLibrary) {
         if (!initialized) {
             return RegisterResult.fail(ERROR_FACE_SDK_NOT_READY);
         }
 
-        FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
-        if (faceSearch == null) {
+        FaceSearch faceSearch = addToRuntimeLibrary ? FaceSDKManager.getInstance().getFaceSearch() : null;
+        if (addToRuntimeLibrary && faceSearch == null) {
             return RegisterResult.fail(ERROR_FACE_SEARCH_NOT_READY);
         }
 
@@ -152,13 +166,19 @@ public class FaceManager {
             return RegisterResult.fail(ERROR_INVALID_FACE_IMAGE);
         }
 
-        int intId = toIntId(empId);
-        faceSearch.pushPersonById(intId, feature);
-        empToIntId.put(empId, intId);
-        intToEmpId.put(intId, empId);
+        if (addToRuntimeLibrary) {
+            synchronized (faceLibraryLock) {
+                int intId = toIntId(empId);
+                faceSearch.pushPersonById(intId, feature);
+                empToIntId.put(empId, intId);
+                intToEmpId.put(intId, empId);
+                AppLogger.i(TAG, "Face registered: empId=" + empId + " intId=" + intId);
+            }
+        } else {
+            AppLogger.i(TAG, "Face image validated: empId=" + empId);
+        }
 
         String localFaceId = "FACE_" + empId;
-        AppLogger.i(TAG, "Face registered: empId=" + empId + " intId=" + intId);
         return RegisterResult.ok(localFaceId);
     }
 

@@ -31,7 +31,8 @@ public class FaceRegistrationManager {
         executor.execute(() -> {
             List<RegistrationResult> results = registerEmployeesInternal(
                     ctx,
-                    DatabaseHelper.get(ctx).getUnregisteredFaces()
+                    DatabaseHelper.get(ctx).getUnregisteredFaces(),
+                    true
             );
             int ok = countSucceeded(results);
             int fail = countFailed(results);
@@ -46,7 +47,18 @@ public class FaceRegistrationManager {
                                   List<Employee> employees,
                                   DetailedCallback callback) {
         executor.execute(() -> {
-            List<RegistrationResult> results = registerEmployeesInternal(ctx, employees);
+            List<RegistrationResult> results = registerEmployeesInternal(ctx, employees, true);
+            if (callback != null) {
+                callback.onDone(results);
+            }
+        });
+    }
+
+    public void validateEmployeesForRebuild(Context ctx,
+                                            List<Employee> employees,
+                                            DetailedCallback callback) {
+        executor.execute(() -> {
+            List<RegistrationResult> results = registerEmployeesInternal(ctx, employees, false);
             if (callback != null) {
                 callback.onDone(results);
             }
@@ -57,7 +69,7 @@ public class FaceRegistrationManager {
         executor.execute(() -> {
             FaceManager.get().removeFace(emp.id);
             DatabaseHelper.get(ctx).updateFaceRegistration(emp.id, null, false);
-            RegistrationResult result = registerSingle(ctx, emp);
+            RegistrationResult result = registerSingle(ctx, emp, true);
             boolean success = result.success;
             if (callback != null) {
                 callback.onDone(success ? 1 : 0, success ? 0 : 1);
@@ -65,7 +77,9 @@ public class FaceRegistrationManager {
         });
     }
 
-    private List<RegistrationResult> registerEmployeesInternal(Context ctx, List<Employee> employees) {
+    private List<RegistrationResult> registerEmployeesInternal(Context ctx,
+                                                              List<Employee> employees,
+                                                              boolean addToRuntimeLibrary) {
         List<RegistrationResult> results = new ArrayList<>();
         if (employees == null) {
             return results;
@@ -74,12 +88,12 @@ public class FaceRegistrationManager {
             if (emp == null || emp.id == null || emp.id.trim().isEmpty()) {
                 continue;
             }
-            results.add(registerSingle(ctx, emp));
+            results.add(registerSingle(ctx, emp, addToRuntimeLibrary));
         }
         return results;
     }
 
-    private RegistrationResult registerSingle(Context ctx, Employee emp) {
+    private RegistrationResult registerSingle(Context ctx, Employee emp, boolean addToRuntimeLibrary) {
         if (emp.faceImageUrl == null || emp.faceImageUrl.trim().isEmpty()) {
             return RegistrationResult.fail(emp.id, FAIL_MSG_FACE_IMAGE_INVALID);
         }
@@ -95,7 +109,9 @@ public class FaceRegistrationManager {
             return RegistrationResult.fail(emp.id, FAIL_MSG_FACE_IMAGE_DOWNLOAD_FAILED);
         }
 
-        FaceManager.RegisterResult result = FaceManager.get().registerFace(ctx, emp.id, localPath);
+        FaceManager.RegisterResult result = addToRuntimeLibrary
+                ? FaceManager.get().registerFace(ctx, emp.id, localPath)
+                : FaceManager.get().validateFaceImage(ctx, emp.id, localPath);
         if (result.success) {
             DatabaseHelper.get(ctx).updateFaceRegistration(emp.id, result.localFaceId, true);
             return RegistrationResult.ok(emp.id);
