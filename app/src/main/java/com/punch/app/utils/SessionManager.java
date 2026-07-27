@@ -695,6 +695,102 @@ public class SessionManager {
                 .apply();
     }
 
+    public boolean isFastPunchEnabled() {
+        return prefs.getBoolean(
+                Constants.KEY_FAST_PUNCH_ENABLED,
+                Constants.DEFAULT_FAST_PUNCH_ENABLED
+        );
+    }
+
+    public void saveFastPunchEnabled(boolean enabled) {
+        prefs.edit().putBoolean(Constants.KEY_FAST_PUNCH_ENABLED, enabled).apply();
+    }
+
+    public boolean shouldShowPunchResultCard() {
+        return prefs.getBoolean(
+                Constants.KEY_SHOW_PUNCH_RESULT_CARD,
+                Constants.DEFAULT_SHOW_PUNCH_RESULT_CARD
+        );
+    }
+
+    public void saveShowPunchResultCard(boolean show) {
+        prefs.edit().putBoolean(Constants.KEY_SHOW_PUNCH_RESULT_CARD, show).apply();
+    }
+
+    public int getPunchResultDisplayMs() {
+        return prefs.getInt(
+                Constants.KEY_PUNCH_RESULT_DISPLAY_MS,
+                Constants.DEFAULT_PUNCH_RESULT_DISPLAY_MS
+        );
+    }
+
+    public void savePunchResultDisplayMs(int milliseconds) {
+        prefs.edit()
+                .putInt(Constants.KEY_PUNCH_RESULT_DISPLAY_MS, Math.max(0, milliseconds))
+                .apply();
+    }
+
+    public String getPunchSpeechMode() {
+        String mode = prefs.getString(
+                Constants.KEY_PUNCH_SPEECH_MODE,
+                Constants.DEFAULT_PUNCH_SPEECH_MODE
+        );
+        if (Constants.PUNCH_SPEECH_MODE_NAME.equals(mode)
+                || Constants.PUNCH_SPEECH_MODE_SUCCESS.equals(mode)
+                || Constants.PUNCH_SPEECH_MODE_FULL.equals(mode)) {
+            return mode;
+        }
+        return Constants.DEFAULT_PUNCH_SPEECH_MODE;
+    }
+
+    public void savePunchSpeechMode(String mode) {
+        String safeMode = Constants.PUNCH_SPEECH_MODE_FULL;
+        if (Constants.PUNCH_SPEECH_MODE_NAME.equals(mode)
+                || Constants.PUNCH_SPEECH_MODE_SUCCESS.equals(mode)) {
+            safeMode = mode;
+        }
+        prefs.edit().putString(Constants.KEY_PUNCH_SPEECH_MODE, safeMode).apply();
+    }
+
+    public float getPunchSpeechRate() {
+        return prefs.getFloat(
+                Constants.KEY_PUNCH_SPEECH_RATE,
+                Constants.DEFAULT_PUNCH_SPEECH_RATE
+        );
+    }
+
+    public void savePunchSpeechRate(float rate) {
+        prefs.edit()
+                .putFloat(Constants.KEY_PUNCH_SPEECH_RATE, Math.max(0.5f, rate))
+                .apply();
+    }
+
+    public int getRecognitionFrameIntervalMs() {
+        return prefs.getInt(
+                Constants.KEY_RECOGNITION_FRAME_INTERVAL_MS,
+                Constants.DEFAULT_RECOGNITION_FRAME_INTERVAL_MS
+        );
+    }
+
+    public void saveRecognitionFrameIntervalMs(int milliseconds) {
+        prefs.edit()
+                .putInt(Constants.KEY_RECOGNITION_FRAME_INTERVAL_MS, Math.max(0, milliseconds))
+                .apply();
+    }
+
+    public int getSuccessCooldownMs() {
+        return prefs.getInt(
+                Constants.KEY_SUCCESS_COOLDOWN_MS,
+                Constants.DEFAULT_SUCCESS_COOLDOWN_MS
+        );
+    }
+
+    public void saveSuccessCooldownMs(int milliseconds) {
+        prefs.edit()
+                .putInt(Constants.KEY_SUCCESS_COOLDOWN_MS, Math.max(0, milliseconds))
+                .apply();
+    }
+
     public void saveActivationMode(String mode) {
         prefs.edit().putString(Constants.KEY_ACTIVATION_MODE, mode).apply();
     }

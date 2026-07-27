@@ -648,9 +648,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         if (textToSpeech == null) {
             return;
         }
-        textToSpeech.setSpeechRate(isChineseLocale(ttsActiveLocale)
-                ? TTS_SPEECH_RATE_CHINESE
-                : TTS_SPEECH_RATE_DEFAULT);
+        textToSpeech.setSpeechRate(getTextToSpeechRate());
     }
 
     private boolean isChineseLocale(@Nullable Locale locale) {
@@ -738,6 +736,48 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         return SessionManager.get().getRecognitionTimeoutSeconds() * 1000L;
     }
 
+    private boolean isFastPunchModeEnabled() {
+        return SessionManager.get().isFastPunchEnabled();
+    }
+
+    private long getFrameIntervalMs() {
+        if (!isFastPunchModeEnabled()) {
+            return FRAME_INTERVAL_MS;
+        }
+        return clamp(SessionManager.get().getRecognitionFrameIntervalMs(), 250, 1000);
+    }
+
+    private long getSuccessResultDisplayMs() {
+        if (!isFastPunchModeEnabled()) {
+            return RESULT_DISPLAY_MS;
+        }
+        return clamp(SessionManager.get().getPunchResultDisplayMs(), 0, 5000);
+    }
+
+    private long getSuccessCooldownMs() {
+        if (!isFastPunchModeEnabled()) {
+            return getSuccessResultDisplayMs();
+        }
+        return clamp(SessionManager.get().getSuccessCooldownMs(), 0, 3000);
+    }
+
+    private boolean shouldShowSuccessResultCard() {
+        return !isFastPunchModeEnabled() || SessionManager.get().shouldShowPunchResultCard();
+    }
+
+    private float getTextToSpeechRate() {
+        if (isFastPunchModeEnabled()) {
+            return clamp(SessionManager.get().getPunchSpeechRate(), 0.5f, 2.0f);
+        }
+        return isChineseLocale(ttsActiveLocale)
+                ? TTS_SPEECH_RATE_CHINESE
+                : TTS_SPEECH_RATE_DEFAULT;
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     private String getEmployeeDisplayName(@Nullable String employeeName, @Nullable String employeeId) {
         if (employeeName != null) {
             String trimmed = employeeName.trim();
@@ -789,17 +829,25 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     private String buildPunchSuccessSpeech(PunchRecord record) {
         String displayName = getEmployeeDisplayName(record.empName, record.empId);
+        if (isFastPunchModeEnabled()) {
+            String speechMode = SessionManager.get().getPunchSpeechMode();
+            if (Constants.PUNCH_SPEECH_MODE_NAME.equals(speechMode)) {
+                return displayName;
+            }
+            if (Constants.PUNCH_SPEECH_MODE_SUCCESS.equals(speechMode)) {
+                return "\u6253\u5361\u6210\u529f";
+            }
+        }
         String action;
         if (PUNCH_TYPE_FREE.equals(record.punchType)) {
-            action = "自由打卡成功";
+            action = "\u81ea\u7531\u6253\u5361\u6210\u529f";
         } else if (Constants.PUNCH_TYPE_SIGN_IN.equals(record.punchType)) {
-            action = "上班打卡成功";
+            action = "\u4e0a\u73ed\u6253\u5361\u6210\u529f";
         } else {
-            action = "下班打卡成功";
+            action = "\u4e0b\u73ed\u6253\u5361\u6210\u529f";
         }
-        return displayName + "，" + action;
+        return displayName + "\uff0c" + action;
     }
-
     private String buildPunchFailureSpeech(@Nullable String employeeName,
                                            @Nullable String employeeId,
                                            @Nullable String detail) {
@@ -911,6 +959,26 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                                 @Nullable String primaryAvatarSource,
                                 @Nullable String fallbackAvatarSource,
                                 @Nullable String cleanupAvatarPath) {
+        showResultCard(
+                statusMessage,
+                resultMessage,
+                success,
+                displayName,
+                primaryAvatarSource,
+                fallbackAvatarSource,
+                cleanupAvatarPath,
+                RESULT_DISPLAY_MS
+        );
+    }
+
+    private void showResultCard(String statusMessage,
+                                String resultMessage,
+                                boolean success,
+                                @Nullable String displayName,
+                                @Nullable String primaryAvatarSource,
+                                @Nullable String fallbackAvatarSource,
+                                @Nullable String cleanupAvatarPath,
+                                long displayMs) {
         recognizing = true;
         setStatus(statusMessage);
         applyResultCardStyle(success);
@@ -928,7 +996,16 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             resetRecognitionAttempt();
             resetPendingMatch();
             updateIdleStatus();
-        }, RESULT_DISPLAY_MS);
+        }, Math.max(0L, displayMs));
+    }
+
+    private void releaseRecognitionAfter(long delayMs) {
+        uiHandler.postDelayed(() -> {
+            recognizing = false;
+            resetRecognitionAttempt();
+            resetPendingMatch();
+            updateIdleStatus();
+        }, Math.max(0L, delayMs));
     }
 
     private void bindResultAvatar(@Nullable String displayName,
@@ -1145,7 +1222,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                     return;
                 }
                 long now = System.currentTimeMillis();
-                if (frameProcessing || (now - lastFrameTime) < FRAME_INTERVAL_MS) return;
+                if (frameProcessing || (now - lastFrameTime) < getFrameIntervalMs()) return;
                 frameProcessing = true;
                 lastFrameTime = now;
 
@@ -1838,6 +1915,11 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         DatabaseHelper.get(requireContext()).enqueueSyncItem(
                 record.clientRecordId, Constants.ACTION_PUNCH_PUSH);
 
+        final boolean fastPunch = isFastPunchModeEnabled();
+        if (fastPunch) {
+            uiHandler.post(() -> showPunchResult(record, false, false));
+        }
+
         executor.execute(() -> {
             boolean synced = false;
             boolean online = ApiService.isBackendAvailable();
@@ -1879,7 +1961,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 );
             }
             final boolean finalSynced = synced;
-            uiHandler.post(() -> showPunchResult(record, finalSynced));
+            if (!fastPunch) {
+                uiHandler.post(() -> showPunchResult(record, finalSynced, true));
+            }
         });
     }
 
@@ -1915,6 +1999,10 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     
     private void showPunchResult(PunchRecord record, boolean synced) {
+        showPunchResult(record, synced, true);
+    }
+
+    private void showPunchResult(PunchRecord record, boolean synced, boolean triggerSyncAfterResult) {
         String timeStr = new SimpleDateFormat("HH:mm:ss", Locale.getDefault())
                 .format(new Date(record.punchTime * 1000));
         Employee employee = DatabaseHelper.get(requireContext()).getEmployee(record.empId);
@@ -1926,19 +2014,39 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                     ? "\u4e0a\u73ed\u6253\u5361"
                     : "\u4e0b\u73ed\u6253\u5361";
         }
-        String syncStr = synced ? "\u5df2\u540c\u6b65" : "\u5df2\u79bb\u7ebf\u4fdd\u5b58";
+        String syncStr = synced
+                ? "\u5df2\u540c\u6b65"
+                : (isFastPunchModeEnabled() ? "\u5df2\u4fdd\u5b58\uff0c\u540e\u53f0\u540c\u6b65" : "\u5df2\u79bb\u7ebf\u4fdd\u5b58");
         String statusMessage = buildEmployeeStatusMessage(record.empName, record.empId, "\u6253\u5361\u6210\u529f", null);
-        showResultCard(
-                statusMessage,
-                buildEmployeeResultMessage(record.empName, record.empId, "\u6253\u5361\u6210\u529f", typeStr + " " + timeStr + "\n" + syncStr),
-                true,
-                getEmployeeDisplayName(record.empName, record.empId),
-                record.snapImagePath,
-                employee != null ? employee.faceImageUrl : null,
-                null
+        String resultMessage = buildEmployeeResultMessage(
+                record.empName,
+                record.empId,
+                "\u6253\u5361\u6210\u529f",
+                typeStr + " " + timeStr + "\n" + syncStr
         );
+        if (shouldShowSuccessResultCard()) {
+            showResultCard(
+                    statusMessage,
+                    resultMessage,
+                    true,
+                    getEmployeeDisplayName(record.empName, record.empId),
+                    record.snapImagePath,
+                    employee != null ? employee.faceImageUrl : null,
+                    null,
+                    getSuccessResultDisplayMs()
+            );
+        } else {
+            setStatus(statusMessage);
+            clearResultAvatar();
+            if (layoutResult != null) {
+                layoutResult.setVisibility(View.GONE);
+            }
+            releaseRecognitionAfter(getSuccessCooldownMs());
+        }
         playPunchFeedback(record);
-        SyncService.triggerSync(requireContext());
+        if (triggerSyncAfterResult) {
+            SyncService.triggerSync(requireContext());
+        }
     }
 
     private void renderPunchStatusSnapshot(PunchApplication.PunchStatusSnapshot snapshot) {
