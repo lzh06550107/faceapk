@@ -395,9 +395,20 @@ public final class ApiService {
                 Employee employee = new Employee();
                 employee.id = numbers;
                 employee.name = safeString(getString(item, "name"));
-                employee.faceImageUrl = safeString(getString(item, "face_image_url"));
-                employee.faceStatus = "enabled";
-                employee.status = Constants.STATUS_NORMAL;
+                employee.dept = safeString(getString(item, "dept"));
+                employee.faceImageUrl = firstNonBlank(
+                        getString(item, "face_image_url"),
+                        getString(item, "face_url")
+                );
+                employee.faceImageSha256 = firstNonBlank(
+                        getString(item, "face_image_sha256"),
+                        getString(item, "face_sha256"),
+                        getString(item, "face_hash")
+                );
+                employee.faceVersion = valueOrZero(getInt(item, "face_version"));
+                employee.faceStatus = safeString(getString(item, "face_status"));
+                employee.status = safeString(getString(item, "status"));
+                employee.syncVersion = valueOrZero(getInt(item, "sync_version"));
                 employee.updatedAt = opTime;
                 employee.isDeleted = 0;
                 result.employees.add(employee);

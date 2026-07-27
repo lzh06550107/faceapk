@@ -84,7 +84,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         if (oldVersion < 7) {
             migratePunchRecordsAddTeamBindingAndClockIndex(db);
         }
-        if (oldVersion >= 7 && oldVersion < 8) {
+        if (oldVersion < 8) {
             migratePunchRecordsAddSnapshotColumns(db);
         }
     }
@@ -602,22 +602,63 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     }
 
     private void migratePunchRecordsAddTeamBindingAndClockIndex(SQLiteDatabase db) {
-        db.delete("sync_queue", null, null);
         db.execSQL("DROP INDEX IF EXISTS idx_punch_date");
         db.execSQL("DROP INDEX IF EXISTS idx_punch_sync");
         db.execSQL("DROP INDEX IF EXISTS idx_punch_limit");
-        db.execSQL("DROP TABLE IF EXISTS punch_records");
-        createPunchRecordsTable(db);
+        addColumnIfMissing(db, "punch_records", "team_binding_id", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing(db, "punch_records", "clock_index", "INTEGER NOT NULL DEFAULT 0");
         createPunchRecordIndexes(db);
+        ensureSyncQueueTable(db);
+        repairPunchSyncQueue(db);
     }
 
     private void migratePunchRecordsAddSnapshotColumns(SQLiteDatabase db) {
-        db.execSQL("ALTER TABLE punch_records ADD COLUMN match_score REAL DEFAULT 0");
-        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_path TEXT");
-        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_mime_type TEXT DEFAULT 'image/jpeg'");
-        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_width INTEGER DEFAULT 0");
-        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_height INTEGER DEFAULT 0");
-        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_image_size INTEGER DEFAULT 0");
-        db.execSQL("ALTER TABLE punch_records ADD COLUMN snap_captured_at INTEGER DEFAULT 0");
+        addColumnIfMissing(db, "punch_records", "match_score", "REAL DEFAULT 0");
+        addColumnIfMissing(db, "punch_records", "snap_image_path", "TEXT");
+        addColumnIfMissing(db, "punch_records", "snap_image_mime_type", "TEXT DEFAULT 'image/jpeg'");
+        addColumnIfMissing(db, "punch_records", "snap_image_width", "INTEGER DEFAULT 0");
+        addColumnIfMissing(db, "punch_records", "snap_image_height", "INTEGER DEFAULT 0");
+        addColumnIfMissing(db, "punch_records", "snap_image_size", "INTEGER DEFAULT 0");
+        addColumnIfMissing(db, "punch_records", "snap_captured_at", "INTEGER DEFAULT 0");
+    }
+
+    private void repairPunchSyncQueue(SQLiteDatabase db) {
+        db.execSQL(
+                "INSERT OR IGNORE INTO sync_queue (record_id, action, retry_count, created_at, last_retry) " +
+                        "SELECT client_record_id, ?, 0, ?, NULL FROM punch_records " +
+                        "WHERE is_synced=0 AND client_record_id IS NOT NULL AND TRIM(client_record_id)<>''",
+                new Object[]{Constants.ACTION_PUNCH_PUSH, System.currentTimeMillis() / 1000});
+    }
+
+    private void ensureSyncQueueTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS sync_queue (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "record_id TEXT NOT NULL, action TEXT NOT NULL, " +
+                "retry_count INTEGER DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, " +
+                "last_retry INTEGER, UNIQUE(action, record_id))");
+        addColumnIfMissing(db, "sync_queue", "retry_count", "INTEGER DEFAULT 0");
+        addColumnIfMissing(db, "sync_queue", "created_at", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing(db, "sync_queue", "last_retry", "INTEGER");
+    }
+
+    private void addColumnIfMissing(SQLiteDatabase db, String table, String column, String definition) {
+        if (!hasColumn(db, table, column)) {
+            db.execSQL("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+        }
+    }
+
+    private boolean hasColumn(SQLiteDatabase db, String table, String column) {
+        Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null);
+        try {
+            while (c.moveToNext()) {
+                String existing = c.getString(c.getColumnIndexOrThrow("name"));
+                if (column.equalsIgnoreCase(existing)) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            c.close();
+        }
     }
 }

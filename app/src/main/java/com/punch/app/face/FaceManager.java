@@ -20,6 +20,7 @@ import com.punch.app.model.Employee;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.SessionManager;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -118,27 +119,29 @@ public class FaceManager {
             return false;
         }
 
+        List<Employee> employees = DatabaseHelper.get(context).getAllActiveEmployees();
+        List<FaceLibraryEntry> entries = new ArrayList<>();
+        for (Employee emp : employees) {
+            if (emp.faceRegistered == 1 && emp.localFaceId != null && emp.faceImageUrl != null) {
+                String imagePath = FaceFileManager.getFaceImagePath(context, emp.id);
+                byte[] feature = extractFeatureFromFile(imagePath);
+                if (feature != null) {
+                    entries.add(new FaceLibraryEntry(emp.id, feature));
+                }
+            }
+        }
+
         synchronized (faceLibraryLock) {
             faceSearch.featureClear();
             empToIntId.clear();
             intToEmpId.clear();
-
-            List<Employee> employees = DatabaseHelper.get(context).getAllActiveEmployees();
-            int count = 0;
-            for (Employee emp : employees) {
-                if (emp.faceRegistered == 1 && emp.localFaceId != null && emp.faceImageUrl != null) {
-                    String imagePath = FaceFileManager.getFaceImagePath(context, emp.id);
-                    byte[] feature = extractFeatureFromFile(imagePath);
-                    if (feature != null) {
-                        int intId = toIntId(emp.id);
-                        faceSearch.pushPersonById(intId, feature);
-                        empToIntId.put(emp.id, intId);
-                        intToEmpId.put(intId, emp.id);
-                        count++;
-                    }
-                }
+            for (FaceLibraryEntry entry : entries) {
+                int intId = toIntId(entry.empId);
+                faceSearch.pushPersonById(intId, entry.feature);
+                empToIntId.put(entry.empId, intId);
+                intToEmpId.put(intId, entry.empId);
             }
-            Log.i(TAG, "rebuildFaceLibrary: " + count + " faces loaded");
+            Log.i(TAG, "rebuildFaceLibrary: " + entries.size() + " faces loaded");
         }
         return true;
     }
@@ -183,12 +186,14 @@ public class FaceManager {
     }
 
     public void removeFace(String empId) {
-        Integer intId = empToIntId.remove(empId);
-        if (intId != null) {
-            intToEmpId.remove(intId);
-            FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
-            if (faceSearch != null) {
-                faceSearch.delPersonById(intId);
+        synchronized (faceLibraryLock) {
+            Integer intId = empToIntId.remove(empId);
+            if (intId != null) {
+                intToEmpId.remove(intId);
+                FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
+                if (faceSearch != null) {
+                    faceSearch.delPersonById(intId);
+                }
             }
         }
     }
@@ -307,54 +312,59 @@ public class FaceManager {
 
     private RecognizeResult doSearch(byte[] feature, FaceInfo faceInfo) {
         FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
+        if (faceSearch == null) {
+            return RecognizeResult.fail(ERROR_FACE_SEARCH_NOT_READY);
+        }
         float configuredThreshold = SessionManager.get().getMatchThreshold();
         float effectiveThreshold = Math.max(configuredThreshold, SAFE_MATCH_THRESHOLD_FLOOR);
-        List<? extends Feature> results = faceSearch.search(
-                BDFaceSDKCommon.FeatureType.BDFACE_FEATURE_TYPE_LIVE_PHOTO,
-                effectiveThreshold,
-                2,
-                feature
-        );
-        if (results == null || results.isEmpty()) {
-            AppLogger.d(TAG, "Face search miss: configuredThreshold=" + configuredThreshold
-                    + ", effectiveThreshold=" + effectiveThreshold);
-            return RecognizeResult.fail(ERROR_NO_MATCHING_FACE);
-        }
+        synchronized (faceLibraryLock) {
+            List<? extends Feature> results = faceSearch.search(
+                    BDFaceSDKCommon.FeatureType.BDFACE_FEATURE_TYPE_LIVE_PHOTO,
+                    effectiveThreshold,
+                    2,
+                    feature
+            );
+            if (results == null || results.isEmpty()) {
+                AppLogger.d(TAG, "Face search miss: configuredThreshold=" + configuredThreshold
+                        + ", effectiveThreshold=" + effectiveThreshold);
+                return RecognizeResult.fail(ERROR_NO_MATCHING_FACE);
+            }
 
-        Feature best = results.get(0);
-        float bestScore = best.getScore();
-        if (bestScore < effectiveThreshold * 100) {
-            AppLogger.d(TAG, "Face search below threshold: bestScore=" + bestScore
-                    + ", configuredThreshold=" + configuredThreshold
-                    + ", effectiveThreshold=" + effectiveThreshold);
-            return RecognizeResult.fail(ERROR_NO_MATCHING_FACE);
-        }
+            Feature best = results.get(0);
+            float bestScore = best.getScore();
+            if (bestScore < effectiveThreshold * 100) {
+                AppLogger.d(TAG, "Face search below threshold: bestScore=" + bestScore
+                        + ", configuredThreshold=" + configuredThreshold
+                        + ", effectiveThreshold=" + effectiveThreshold);
+                return RecognizeResult.fail(ERROR_NO_MATCHING_FACE);
+            }
 
-        float secondScore = 0f;
-        if (results.size() > 1 && results.get(1) != null) {
-            secondScore = results.get(1).getScore();
-        }
-        float scoreGap = bestScore - secondScore;
-        if (secondScore > 0f && scoreGap < SAFE_MATCH_SCORE_GAP) {
-            AppLogger.w(TAG, "Reject ambiguous face match: bestScore=" + bestScore
+            float secondScore = 0f;
+            if (results.size() > 1 && results.get(1) != null) {
+                secondScore = results.get(1).getScore();
+            }
+            float scoreGap = bestScore - secondScore;
+            if (secondScore > 0f && scoreGap < SAFE_MATCH_SCORE_GAP) {
+                AppLogger.w(TAG, "Reject ambiguous face match: bestScore=" + bestScore
+                        + ", secondScore=" + secondScore
+                        + ", scoreGap=" + scoreGap
+                        + ", configuredThreshold=" + configuredThreshold
+                        + ", effectiveThreshold=" + effectiveThreshold);
+                return RecognizeResult.fail(ERROR_MATCH_AMBIGUOUS);
+            }
+
+            String empId = intToEmpId.get(best.getId());
+            if (empId == null) {
+                return RecognizeResult.fail(ERROR_FACE_ID_MAPPING_MISSING);
+            }
+            AppLogger.d(TAG, "Face search matched: empId=" + empId
+                    + ", bestScore=" + bestScore
                     + ", secondScore=" + secondScore
                     + ", scoreGap=" + scoreGap
                     + ", configuredThreshold=" + configuredThreshold
                     + ", effectiveThreshold=" + effectiveThreshold);
-            return RecognizeResult.fail(ERROR_MATCH_AMBIGUOUS);
+            return RecognizeResult.ok(empId, bestScore, buildFaceBounds(faceInfo));
         }
-
-        String empId = intToEmpId.get(best.getId());
-        if (empId == null) {
-            return RecognizeResult.fail(ERROR_FACE_ID_MAPPING_MISSING);
-        }
-        AppLogger.d(TAG, "Face search matched: empId=" + empId
-                + ", bestScore=" + bestScore
-                + ", secondScore=" + secondScore
-                + ", scoreGap=" + scoreGap
-                + ", configuredThreshold=" + configuredThreshold
-                + ", effectiveThreshold=" + effectiveThreshold);
-        return RecognizeResult.ok(empId, bestScore, buildFaceBounds(faceInfo));
     }
 
     private RectF buildFaceBounds(FaceInfo faceInfo) {
@@ -438,6 +448,16 @@ public class FaceManager {
 
     public boolean isInitialized() {
         return initialized;
+    }
+
+    private static final class FaceLibraryEntry {
+        final String empId;
+        final byte[] feature;
+
+        FaceLibraryEntry(String empId, byte[] feature) {
+            this.empId = empId;
+            this.feature = feature;
+        }
     }
 
     public static class RegisterResult {

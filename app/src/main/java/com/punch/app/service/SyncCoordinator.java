@@ -658,12 +658,20 @@ public final class SyncCoordinator {
             return incoming;
         }
 
-        boolean faceChanged = !safeString(existing.faceImageUrl).equals(safeString(incoming.faceImageUrl));
+        boolean faceUrlChanged = !safeString(existing.faceImageUrl).equals(safeString(incoming.faceImageUrl));
+        boolean faceShaChanged = !isBlank(incoming.faceImageSha256)
+                && !safeString(existing.faceImageSha256).equals(safeString(incoming.faceImageSha256));
+        boolean faceVersionChanged = incoming.faceVersion > 0 && existing.faceVersion != incoming.faceVersion;
+        String resolvedFaceStatus = isBlank(incoming.faceStatus)
+                ? safeString(existing.faceStatus)
+                : incoming.faceStatus;
+        boolean faceStatusChanged = !safeString(existing.faceStatus).equals(safeString(resolvedFaceStatus));
+        boolean faceChanged = faceUrlChanged || faceShaChanged || faceVersionChanged || faceStatusChanged;
         incoming.name = isBlank(incoming.name) ? existing.name : incoming.name;
         incoming.dept = isBlank(incoming.dept) ? existing.dept : incoming.dept;
-        incoming.faceImageSha256 = existing.faceImageSha256;
-        incoming.faceVersion = existing.faceVersion;
-        incoming.faceStatus = isBlank(incoming.faceStatus) ? safeString(existing.faceStatus) : incoming.faceStatus;
+        incoming.faceImageSha256 = resolveIncomingFaceSha(existing, incoming, faceUrlChanged);
+        incoming.faceVersion = resolveIncomingFaceVersion(existing, incoming, faceUrlChanged);
+        incoming.faceStatus = isBlank(resolvedFaceStatus) ? "enabled" : resolvedFaceStatus;
         incoming.localFaceId = faceChanged ? "" : existing.localFaceId;
         incoming.faceRegistered = faceChanged ? 0 : existing.faceRegistered;
         incoming.assignedLineCode = existing.assignedLineCode;
@@ -675,6 +683,20 @@ public final class SyncCoordinator {
             incoming.updatedAt = existing.updatedAt;
         }
         return incoming;
+    }
+
+    private String resolveIncomingFaceSha(Employee existing, Employee incoming, boolean faceUrlChanged) {
+        if (!isBlank(incoming.faceImageSha256)) {
+            return incoming.faceImageSha256;
+        }
+        return faceUrlChanged ? "" : existing.faceImageSha256;
+    }
+
+    private int resolveIncomingFaceVersion(Employee existing, Employee incoming, boolean faceUrlChanged) {
+        if (incoming.faceVersion > 0) {
+            return incoming.faceVersion;
+        }
+        return faceUrlChanged ? 0 : existing.faceVersion;
     }
 
     private boolean applyDeleteChange(DatabaseHelper db, EmployeeSyncData.ChangeItem changeItem) {
