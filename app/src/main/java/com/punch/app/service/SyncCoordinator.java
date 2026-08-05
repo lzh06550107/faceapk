@@ -41,6 +41,7 @@ public final class SyncCoordinator {
     private static final String FAILURE_MSG_FACE_SDK_NOT_READY = "人脸引擎未就绪";
     private static final String FAILURE_MSG_FACE_REGISTRATION_INCOMPLETE = "人脸注册未完成";
     private static final String FAILURE_MSG_DEVICE_CONFIG_SYNC_FAILED = "设备配置同步失败";
+    private static final String FAILURE_MSG_FACE_IMAGE_URL_EMPTY = "人脸图片URL为空";
     private static final String STATUS_MSG_PUNCH_READY = "准备完成，可以开始打卡";
     private static final String STATUS_MSG_PUNCH_PARTIAL_READY = "打卡已可用，部分员工人脸未入库";
     private static final String STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED = "人脸库重建失败，请稍后重试";
@@ -105,7 +106,7 @@ public final class SyncCoordinator {
         if (app != null) {
             publishPreparationOutcome(app, outcome);
         }
-        return outcome.isUsable();
+        return outcome.isUsable() || FaceManager.get().getLoadedFaceCount() > 0;
     }
 
     private void runHeartbeatCycle(Context appContext, boolean forcePunchRetry) {
@@ -540,7 +541,8 @@ public final class SyncCoordinator {
                             EventResultDto.EmployeeResult.success(changeItem.numbers, safeOpType(changeItem.opType));
                     if (isBlank(merged.faceImageUrl)) {
                         employeeResult.success = false;
-                        employeeResult.failMsg = FaceManager.ERROR_INVALID_FACE_IMAGE;
+                        employeeResult.failMsg = FAILURE_MSG_FACE_IMAGE_URL_EMPTY;
+                        AppLogger.w(TAG, "Employee face image url is empty: empId=" + safeString(merged.id));
                     } else if (merged.faceRegistered != 1) {
                         registrationTargets.put(merged.id, merged);
                     }
@@ -638,7 +640,7 @@ public final class SyncCoordinator {
         if (!rebuildFinalFaceLibrary(context, app)) {
             return EmployeeSyncProcessingResult.failure(STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED, new ArrayList<>());
         }
-        boolean ready = registrationOutcome.isUsable();
+        boolean ready = registrationOutcome.isUsable() || FaceManager.get().getLoadedFaceCount() > 0;
         if (app != null) {
             publishPreparationOutcome(app, registrationOutcome);
         }
@@ -783,12 +785,49 @@ public final class SyncCoordinator {
         }
 
         AppLogger.i(TAG, "Face registration: ok=" + ok + " fail=" + fail);
-        InteractionLogger.logBusiness(
-                InteractionLogger.GROUP_EMPLOYEE_SYNC,
-                "人脸注册结果",
-                "成功 " + ok + "\n失败 " + fail
-        );
+        String detail = buildFaceRegistrationDetail(holder.get(), ok, fail);
+        if (fail > 0) {
+            InteractionLogger.logBusinessFailure(
+                    InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                    "人脸注册结果",
+                    detail
+            );
+        } else {
+            InteractionLogger.logBusiness(
+                    InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                    "人脸注册结果",
+                    detail
+            );
+        }
         return FaceRegistrationOutcome.success(holder.get(), ok, fail);
+    }
+
+    private String buildFaceRegistrationDetail(
+            List<FaceRegistrationManager.RegistrationResult> results,
+            int ok,
+            int fail
+    ) {
+        StringBuilder detail = new StringBuilder();
+        detail.append("成功 ").append(ok).append("\n失败 ").append(fail);
+        if (results == null || fail <= 0) {
+            return detail.toString();
+        }
+        int failedIndex = 0;
+        for (FaceRegistrationManager.RegistrationResult result : results) {
+            if (result == null || result.success) {
+                continue;
+            }
+            failedIndex += 1;
+            detail.append("\n失败明细 ")
+                    .append(failedIndex)
+                    .append(": empId=")
+                    .append(safeString(result.empId))
+                    .append(", reason=")
+                    .append(safeString(result.failMsg));
+            AppLogger.w(TAG, "Face registration failed: empId=" + safeString(result.empId)
+                    + " reason=" + safeString(result.failMsg));
+        }
+        return detail.toString();
     }
 
     private List<String> resolveTeamTimeRanges(DeviceDto.DeviceConfigData data, int teamBindingId) {
@@ -923,20 +962,47 @@ public final class SyncCoordinator {
         if (outcome.failed > 0 && outcome.succeeded > 0) {
             app.markPunchRecognitionReady(STATUS_MSG_PUNCH_PARTIAL_READY);
             app.reportStatusEvent(
-                    "人脸入库部分失败：成功 " + outcome.succeeded + "，失败 " + outcome.failed + "，稍后自动重试",
+                    "人脸入库部分失败：成功 " + outcome.succeeded + "，失败 " + outcome.failed
+                            + buildFirstFailureSuffix(outcome.results)
+                            + "，稍后自动重试",
                     PunchApplication.STATUS_LEVEL_ERROR
             );
             return;
         }
         if (outcome.failed > 0) {
+            if (FaceManager.get().getLoadedFaceCount() > 0) {
+                app.markPunchRecognitionReady(STATUS_MSG_PUNCH_PARTIAL_READY);
+                app.reportStatusEvent(
+                        "人脸入库部分失败：成功 " + outcome.succeeded + "，失败 " + outcome.failed
+                                + buildFirstFailureSuffix(outcome.results)
+                                + "，已保留现有 " + FaceManager.get().getLoadedFaceCount() + " 个人脸，可继续打卡",
+                        PunchApplication.STATUS_LEVEL_ERROR
+                );
+                return;
+            }
             app.markPunchRecognitionFailed(STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED);
             app.reportStatusEvent(
-                    "人脸入库失败：成功 " + outcome.succeeded + "，失败 " + outcome.failed,
+                    "人脸入库失败：成功 " + outcome.succeeded + "，失败 " + outcome.failed
+                            + buildFirstFailureSuffix(outcome.results),
                     PunchApplication.STATUS_LEVEL_ERROR
             );
             return;
         }
         app.markPunchRecognitionReady(STATUS_MSG_PUNCH_READY);
+    }
+
+    private String buildFirstFailureSuffix(List<FaceRegistrationManager.RegistrationResult> results) {
+        if (results == null) {
+            return "";
+        }
+        for (FaceRegistrationManager.RegistrationResult result : results) {
+            if (result == null || result.success) {
+                continue;
+            }
+            return "，首个失败 empId=" + safeString(result.empId)
+                    + "，原因=" + safeString(result.failMsg);
+        }
+        return "";
     }
 
     private static final class EmployeeSyncProcessingResult {

@@ -55,6 +55,7 @@ public class Constants {
     public static final String KEY_PUNCH_SPEECH_RATE = "punch_speech_rate";
     public static final String KEY_RECOGNITION_FRAME_INTERVAL_MS = "recognition_frame_interval_ms";
     public static final String KEY_SUCCESS_COOLDOWN_MS = "success_cooldown_ms";
+    public static final String KEY_OVERTIME_SIGN_OUT_OPTIONS = "overtime_sign_out_options";
     public static final String KEY_CAMERA_FACING = "camera_facing";
     public static final String KEY_SOUND_ENABLED = "sound_enabled";
     public static final String KEY_ACTIVATION_MODE = "activation_mode";
@@ -104,16 +105,16 @@ public class Constants {
     public static final boolean DEFAULT_MASK_DETECT = false;
     public static final int DEFAULT_RECOGNITION_TIMEOUT_SECONDS = 5;
     public static final int DEFAULT_PUNCH_TIME_WINDOW_MINUTES = 20;
-    public static final boolean DEFAULT_FAST_PUNCH_ENABLED = false;
-    public static final boolean DEFAULT_SHOW_PUNCH_RESULT_CARD = true;
+    public static final boolean DEFAULT_FAST_PUNCH_ENABLED = true;
+    public static final boolean DEFAULT_SHOW_PUNCH_RESULT_CARD = false;
     public static final int DEFAULT_PUNCH_RESULT_DISPLAY_MS = 3000;
     public static final String PUNCH_SPEECH_MODE_FULL = "full";
     public static final String PUNCH_SPEECH_MODE_NAME = "name";
     public static final String PUNCH_SPEECH_MODE_SUCCESS = "success";
-    public static final String DEFAULT_PUNCH_SPEECH_MODE = PUNCH_SPEECH_MODE_FULL;
-    public static final float DEFAULT_PUNCH_SPEECH_RATE = 1.0f;
-    public static final int DEFAULT_RECOGNITION_FRAME_INTERVAL_MS = 600;
-    public static final int DEFAULT_SUCCESS_COOLDOWN_MS = 800;
+    public static final String DEFAULT_PUNCH_SPEECH_MODE = PUNCH_SPEECH_MODE_NAME;
+    public static final float DEFAULT_PUNCH_SPEECH_RATE = 1.3f;
+    public static final int DEFAULT_RECOGNITION_FRAME_INTERVAL_MS = 350;
+    public static final int DEFAULT_SUCCESS_COOLDOWN_MS = 500;
 
     public static final String ACTIVATION_MODE_ONLINE = "online";
     public static final String ACTIVATION_MODE_OFFLINE_ZIP = "offline_zip";

@@ -1619,7 +1619,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         return PunchTimeResolver.findAllowedPunchOptionIndexes(
                 punchOptions,
                 System.currentTimeMillis(),
-                SessionManager.get().getPunchTimeWindowMinutes()
+                SessionManager.get().getPunchTimeWindowMinutes(),
+                SessionManager.get().getOvertimeSignOutOptions()
         );
     }
 
@@ -1630,7 +1631,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         return PunchTimeResolver.isWithinAllowedPunchTime(
                 getSelectedPunchOptionLabel(),
                 System.currentTimeMillis(),
-                SessionManager.get().getPunchTimeWindowMinutes()
+                SessionManager.get().getPunchTimeWindowMinutes(),
+                punchOptions,
+                SessionManager.get().getOvertimeSignOutOptions()
         );
     }
 
@@ -1739,7 +1742,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         return PunchTimeResolver.resolveAllowedPunchTimeSeconds(
                 optionLabel,
                 System.currentTimeMillis(),
-                SessionManager.get().getPunchTimeWindowMinutes()
+                SessionManager.get().getPunchTimeWindowMinutes(),
+                punchOptions,
+                SessionManager.get().getOvertimeSignOutOptions()
         );
     }
 
@@ -2389,7 +2394,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         PunchTimeResolver.WindowValidationResult windowValidation =
                 PunchTimeResolver.validatePunchTimeWindows(
                         SessionManager.get().getCurrentTeamTimeRanges(),
-                        SessionManager.get().getPunchTimeWindowMinutes()
+                        SessionManager.get().getPunchTimeWindowMinutes(),
+                        SessionManager.get().getOvertimeSignOutOptions()
                 );
         List<Integer> allowedIndexes = windowValidation.valid
                 ? getAllowedPunchOptionIndexesNow()

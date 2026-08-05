@@ -538,6 +538,30 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="18dp"
                     android:layout_marginBottom="8dp"
+                    android:text="加班组"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:text="开启某个下班项后，该下班窗口会向后延长，但最多延长到下一个班次上班打卡窗口开始前。"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <LinearLayout
+                    android:id="@+id/layout_overtime_options"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:layout_marginBottom="8dp"
                     android:text="快速打卡"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
@@ -606,10 +630,26 @@
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_punch_result_display_minus"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:minWidth="0dp"
+                        android:padding="0dp"
+                        android:text="-"
+                        android:textAllCaps="false"
+                        android:textColor="@color/primary"
+                        android:textSize="18sp"
+                        app:backgroundTint="@color/white"
+                        app:cornerRadius="8dp"
+                        app:strokeColor="@color/primary"
+                        app:strokeWidth="1dp" />
+
                     <EditText
                         android:id="@+id/et_punch_result_display_ms"
                         android:layout_width="0dp"
                         android:layout_height="42dp"
+                        android:layout_marginStart="8dp"
                         android:layout_marginEnd="8dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_input"
@@ -619,6 +659,22 @@
                         android:textColor="@color/text_primary"
                         android:textSize="15sp"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_punch_result_display_plus"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:padding="0dp"
+                        android:text="+"
+                        android:textAllCaps="false"
+                        android:textColor="@color/primary"
+                        android:textSize="18sp"
+                        app:backgroundTint="@color/white"
+                        app:cornerRadius="8dp"
+                        app:strokeColor="@color/primary"
+                        app:strokeWidth="1dp" />
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -679,26 +735,27 @@
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 
-                    <EditText
-                        android:id="@+id/et_punch_speech_rate"
+                    <com.google.android.material.textfield.TextInputLayout
                         android:layout_width="0dp"
-                        android:layout_height="42dp"
-                        android:layout_marginEnd="8dp"
-                        android:layout_weight="1"
-                        android:background="@drawable/bg_input"
-                        android:gravity="center"
-                        android:inputType="numberDecimal"
-                        android:maxLines="1"
-                        android:textColor="@color/text_primary"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="x"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="13sp" />
+                        android:layout_weight="1"
+                        app:boxBackgroundMode="outline"
+                        app:boxStrokeColor="@color/primary"
+                        app:endIconMode="dropdown_menu"
+                        app:hintEnabled="false">
+
+                        <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                            android:id="@+id/dropdown_punch_speech_rate"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:clickable="true"
+                            android:cursorVisible="false"
+                            android:dropDownVerticalOffset="4dp"
+                            android:inputType="none"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
                 </LinearLayout>
 
                 <LinearLayout
@@ -715,10 +772,26 @@
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_recognition_frame_interval_minus"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:minWidth="0dp"
+                        android:padding="0dp"
+                        android:text="-"
+                        android:textAllCaps="false"
+                        android:textColor="@color/primary"
+                        android:textSize="18sp"
+                        app:backgroundTint="@color/white"
+                        app:cornerRadius="8dp"
+                        app:strokeColor="@color/primary"
+                        app:strokeWidth="1dp" />
+
                     <EditText
                         android:id="@+id/et_recognition_frame_interval_ms"
                         android:layout_width="0dp"
                         android:layout_height="42dp"
+                        android:layout_marginStart="8dp"
                         android:layout_marginEnd="8dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_input"
@@ -728,6 +801,22 @@
                         android:textColor="@color/text_primary"
                         android:textSize="15sp"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_recognition_frame_interval_plus"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:padding="0dp"
+                        android:text="+"
+                        android:textAllCaps="false"
+                        android:textColor="@color/primary"
+                        android:textSize="18sp"
+                        app:backgroundTint="@color/white"
+                        app:cornerRadius="8dp"
+                        app:strokeColor="@color/primary"
+                        app:strokeWidth="1dp" />
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -751,10 +840,26 @@
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_success_cooldown_minus"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:minWidth="0dp"
+                        android:padding="0dp"
+                        android:text="-"
+                        android:textAllCaps="false"
+                        android:textColor="@color/primary"
+                        android:textSize="18sp"
+                        app:backgroundTint="@color/white"
+                        app:cornerRadius="8dp"
+                        app:strokeColor="@color/primary"
+                        app:strokeWidth="1dp" />
+
                     <EditText
                         android:id="@+id/et_success_cooldown_ms"
                         android:layout_width="0dp"
                         android:layout_height="42dp"
+                        android:layout_marginStart="8dp"
                         android:layout_marginEnd="8dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_input"
@@ -764,6 +869,22 @@
                         android:textColor="@color/text_primary"
                         android:textSize="15sp"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_success_cooldown_plus"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:layout_marginEnd="8dp"
+                        android:minWidth="0dp"
+                        android:padding="0dp"
+                        android:text="+"
+                        android:textAllCaps="false"
+                        android:textColor="@color/primary"
+                        android:textSize="18sp"
+                        app:backgroundTint="@color/white"
+                        app:cornerRadius="8dp"
+                        app:strokeColor="@color/primary"
+                        app:strokeWidth="1dp" />
 
                     <TextView
                         android:layout_width="wrap_content"

@@ -59,6 +59,7 @@ public class FaceManager {
     private final Map<Integer, String> intToEmpId = new HashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object faceLibraryLock = new Object();
+    private volatile int loadedFaceCount;
 
     public void init(Context context, String licenseFileName, final InitCallback callback) {
         appContext = context.getApplicationContext();
@@ -111,11 +112,13 @@ public class FaceManager {
 
     public boolean rebuildFaceLibrarySync(Context context) {
         if (!initialized) {
+            loadedFaceCount = 0;
             return false;
         }
 
         FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
         if (faceSearch == null) {
+            loadedFaceCount = 0;
             return false;
         }
 
@@ -124,7 +127,7 @@ public class FaceManager {
         for (Employee emp : employees) {
             if (emp.faceRegistered == 1 && emp.localFaceId != null && emp.faceImageUrl != null) {
                 String imagePath = FaceFileManager.getFaceImagePath(context, emp.id);
-                byte[] feature = extractFeatureFromFile(imagePath);
+                byte[] feature = extractFeatureFromFile(imagePath, emp.id);
                 if (feature != null) {
                     entries.add(new FaceLibraryEntry(emp.id, feature));
                 }
@@ -141,6 +144,7 @@ public class FaceManager {
                 empToIntId.put(entry.empId, intId);
                 intToEmpId.put(intId, entry.empId);
             }
+            loadedFaceCount = entries.size();
             Log.i(TAG, "rebuildFaceLibrary: " + entries.size() + " faces loaded");
         }
         return true;
@@ -164,7 +168,7 @@ public class FaceManager {
             return RegisterResult.fail(ERROR_FACE_SEARCH_NOT_READY);
         }
 
-        byte[] feature = extractFeatureFromFile(imageFilePath);
+        byte[] feature = extractFeatureFromFile(imageFilePath, empId);
         if (feature == null) {
             return RegisterResult.fail(ERROR_INVALID_FACE_IMAGE);
         }
@@ -411,9 +415,11 @@ public class FaceManager {
     }
 
 
-    private byte[] extractFeatureFromFile(String imagePath) {
+    private byte[] extractFeatureFromFile(String imagePath, String empId) {
         Bitmap bmp = BitmapFactory.decodeFile(imagePath);
         if (bmp == null) {
+            AppLogger.w(TAG, "Face image decode failed: empId=" + safeEmpId(empId)
+                    + " path=" + imagePath);
             return null;
         }
 
@@ -424,6 +430,8 @@ public class FaceManager {
                     .getFaceDetectPerson()
                     .detect(BDFaceSDKCommon.DetectType.DETECT_VIS, inst);
             if (faceInfos == null || faceInfos.length == 0) {
+                AppLogger.w(TAG, "No face detected in registered image: empId=" + safeEmpId(empId)
+                        + " path=" + imagePath);
                 return null;
             }
 
@@ -431,10 +439,19 @@ public class FaceManager {
             float size = FaceSDKManager.getInstance().getFacePersonFeature()
                     .feature(BDFaceSDKCommon.FeatureType.BDFACE_FEATURE_TYPE_LIVE_PHOTO,
                             inst, faceInfos[0].landmarks, feature);
-            return size > 0 ? feature : null;
+            if (size <= 0) {
+                AppLogger.w(TAG, "Face feature extraction failed: empId=" + safeEmpId(empId)
+                        + " path=" + imagePath);
+                return null;
+            }
+            return feature;
         } finally {
             inst.destory();
         }
+    }
+
+    private String safeEmpId(String empId) {
+        return empId == null || empId.trim().isEmpty() ? "-" : empId.trim();
     }
 
     private int toIntId(String empId) {
@@ -448,6 +465,10 @@ public class FaceManager {
 
     public boolean isInitialized() {
         return initialized;
+    }
+
+    public int getLoadedFaceCount() {
+        return loadedFaceCount;
     }
 
     private static final class FaceLibraryEntry {

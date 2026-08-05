@@ -152,6 +152,11 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 | 批量打卡 | `POST /punch/batch` |
 | 设备配置 | `GET/PUT /device/config` |
 
+## 安装
+
+```bash
+adb install -r D:\code\faceapk\app\release\app-release.apk && adb shell dpm set-device-owner com.punch.app/.receiver.KioskDeviceAdminReceiver
+```
 
 当前需要设置打卡时间范围，即在班次的上下班时间点前后设置一定的时间，可以用来计算打卡时间，比如：如果你把 “打卡间隔” 设置为 20 分钟，则
 
@@ -180,3 +185,5 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 还有一个问题，如果用户设置的打卡间隔，导致同一个班次上班和下班打卡时间重叠怎么办？或者导致当前班次上班打卡时间和前一个班次的下班打卡时间重叠了怎么办？
 
+adb install -r -t app-debug.apk&&adb shell dpm remove-active-admin com.punch.app/.receiver.KioskDeviceAdminReceiver
+&&adb uninstall com.punch.app

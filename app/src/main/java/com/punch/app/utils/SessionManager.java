@@ -761,7 +761,7 @@ public class SessionManager {
 
     public void savePunchSpeechRate(float rate) {
         prefs.edit()
-                .putFloat(Constants.KEY_PUNCH_SPEECH_RATE, Math.max(0.5f, rate))
+                .putFloat(Constants.KEY_PUNCH_SPEECH_RATE, Math.max(0.5f, Math.min(2.0f, rate)))
                 .apply();
     }
 
@@ -788,6 +788,66 @@ public class SessionManager {
     public void saveSuccessCooldownMs(int milliseconds) {
         prefs.edit()
                 .putInt(Constants.KEY_SUCCESS_COOLDOWN_MS, Math.max(0, milliseconds))
+                .apply();
+    }
+
+    public List<String> getOvertimeSignOutOptions() {
+        if (!prefs.contains(Constants.KEY_OVERTIME_SIGN_OUT_OPTIONS)) {
+            return getDefaultOvertimeSignOutOptions();
+        }
+        String json = prefs.getString(Constants.KEY_OVERTIME_SIGN_OUT_OPTIONS, "");
+        if (json == null || json.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            JSONArray array = new JSONArray(json);
+            List<String> options = new ArrayList<>();
+            for (int i = 0; i < array.length(); i++) {
+                String option = array.optString(i, "").trim();
+                if (!option.isEmpty() && !options.contains(option)) {
+                    options.add(option);
+                }
+            }
+            return options;
+        } catch (JSONException e) {
+            Log.w(TAG, "Failed to decode overtime sign-out options", e);
+            return Collections.emptyList();
+        }
+    }
+
+    public boolean hasOvertimeSignOutOptionsConfig() {
+        return prefs.contains(Constants.KEY_OVERTIME_SIGN_OUT_OPTIONS);
+    }
+
+    private List<String> getDefaultOvertimeSignOutOptions() {
+        List<String> timeRanges = getCurrentTeamTimeRanges();
+        if (timeRanges == null || timeRanges.isEmpty()) {
+            return Collections.emptyList();
+        }
+        for (int i = timeRanges.size() - 1; i >= 0; i--) {
+            String timeRange = timeRanges.get(i);
+            if (timeRange != null && !timeRange.trim().isEmpty()) {
+                return Collections.singletonList(timeRange.trim() + " \u4e0b\u73ed");
+            }
+        }
+        return Collections.emptyList();
+    }
+
+    public void saveOvertimeSignOutOptions(List<String> options) {
+        JSONArray array = new JSONArray();
+        if (options != null) {
+            for (String option : options) {
+                if (option == null) {
+                    continue;
+                }
+                String value = option.trim();
+                if (!value.isEmpty()) {
+                    array.put(value);
+                }
+            }
+        }
+        prefs.edit()
+                .putString(Constants.KEY_OVERTIME_SIGN_OUT_OPTIONS, array.toString())
                 .apply();
     }
 

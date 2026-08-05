@@ -24,6 +24,8 @@ public final class PunchTimeResolver {
                 optionLabel,
                 nowMillis,
                 windowMinutes,
+                null,
+                null,
                 TimeZone.getDefault()
         );
     }
@@ -32,10 +34,36 @@ public final class PunchTimeResolver {
                                                long nowMillis,
                                                int windowMinutes,
                                                TimeZone timeZone) {
-        long allowedTargetMillis = findAllowedTargetMillis(
+        return resolveAllowedPunchTimeSeconds(optionLabel, nowMillis, windowMinutes, null, null, timeZone);
+    }
+
+    public static long resolveAllowedPunchTimeSeconds(String optionLabel,
+                                                      long nowMillis,
+                                                      int windowMinutes,
+                                                      List<String> optionLabels,
+                                                      List<String> overtimeSignOutOptions) {
+        return resolveAllowedPunchTimeSeconds(
                 optionLabel,
                 nowMillis,
                 windowMinutes,
+                optionLabels,
+                overtimeSignOutOptions,
+                TimeZone.getDefault()
+        );
+    }
+
+    static long resolveAllowedPunchTimeSeconds(String optionLabel,
+                                               long nowMillis,
+                                               int windowMinutes,
+                                               List<String> optionLabels,
+                                               List<String> overtimeSignOutOptions,
+                                               TimeZone timeZone) {
+        long allowedTargetMillis = findAllowedTargetMillis(
+                optionLabel,
+                optionLabels,
+                nowMillis,
+                windowMinutes,
+                overtimeSignOutOptions,
                 timeZone
         );
         if (allowedTargetMillis >= 0) {
@@ -109,6 +137,8 @@ public final class PunchTimeResolver {
                 optionLabel,
                 nowMillis,
                 windowMinutes,
+                null,
+                null,
                 TimeZone.getDefault()
         );
     }
@@ -117,25 +147,53 @@ public final class PunchTimeResolver {
                                             long nowMillis,
                                             int windowMinutes,
                                             TimeZone timeZone) {
+        return isWithinAllowedPunchTime(optionLabel, nowMillis, windowMinutes, null, null, timeZone);
+    }
+
+    public static boolean isWithinAllowedPunchTime(String optionLabel,
+                                                   long nowMillis,
+                                                   int windowMinutes,
+                                                   List<String> optionLabels,
+                                                   List<String> overtimeSignOutOptions) {
+        return isWithinAllowedPunchTime(
+                optionLabel,
+                nowMillis,
+                windowMinutes,
+                optionLabels,
+                overtimeSignOutOptions,
+                TimeZone.getDefault()
+        );
+    }
+
+    static boolean isWithinAllowedPunchTime(String optionLabel,
+                                            long nowMillis,
+                                            int windowMinutes,
+                                            List<String> optionLabels,
+                                            List<String> overtimeSignOutOptions,
+                                            TimeZone timeZone) {
         if (!isScheduledPunchOption(optionLabel)) {
             return false;
         }
-        return findAllowedTargetMillis(optionLabel, nowMillis, windowMinutes, timeZone) >= 0;
+        return findAllowedTargetMillis(
+                optionLabel,
+                optionLabels,
+                nowMillis,
+                windowMinutes,
+                overtimeSignOutOptions,
+                timeZone
+        ) >= 0;
     }
 
     private static long findAllowedTargetMillis(String optionLabel,
+                                                List<String> optionLabels,
                                                 long nowMillis,
                                                 int windowMinutes,
+                                                List<String> overtimeSignOutOptions,
                                                 TimeZone timeZone) {
-        if (!isScheduledPunchOption(optionLabel)) {
+        PunchOption option = parsePunchOption(optionLabel);
+        if (option == null) {
             return -1L;
         }
-        String[] parts = optionLabel.trim().split("\\s+");
-        String[] range = parts[0].split("-");
-        int startMinutes = parseMinutes(range[0]);
-        int endMinutes = parseMinutes(range[1]);
-        boolean signIn = parts[1].contains("\u4e0a\u73ed");
-        boolean overnight = endMinutes <= startMinutes;
 
         Calendar now = Calendar.getInstance(timeZone);
         now.setTimeInMillis(nowMillis);
@@ -145,23 +203,21 @@ public final class PunchTimeResolver {
         currentDayStart.set(Calendar.HOUR_OF_DAY, 0);
         currentDayStart.set(Calendar.MINUTE, 0);
 
-        long windowMillis = Math.max(0, windowMinutes) * 60_000L;
+        int safeWindow = Math.max(0, windowMinutes);
+        long dayStartMillis = currentDayStart.getTimeInMillis();
         for (int offset = -1; offset <= 1; offset++) {
-            Calendar target = (Calendar) currentDayStart.clone();
-            target.add(Calendar.DAY_OF_MONTH, offset);
-            if (signIn) {
-                target.set(Calendar.HOUR_OF_DAY, startMinutes / 60);
-                target.set(Calendar.MINUTE, startMinutes % 60);
-            } else {
-                if (overnight) {
-                    target.add(Calendar.DAY_OF_MONTH, 1);
-                }
-                target.set(Calendar.HOUR_OF_DAY, endMinutes / 60);
-                target.set(Calendar.MINUTE, endMinutes % 60);
-            }
-            long targetMillis = target.getTimeInMillis();
-            if (nowMillis >= targetMillis - windowMillis
-                    && nowMillis <= targetMillis + windowMillis) {
+            int targetMinute = option.targetMinute(offset);
+            PunchWindow allowedWindow = buildAllowedPunchWindow(
+                    option,
+                    offset,
+                    safeWindow,
+                    optionLabels,
+                    overtimeSignOutOptions
+            );
+            long targetMillis = dayStartMillis + targetMinute * 60_000L;
+            long startMillis = dayStartMillis + allowedWindow.startMinute * 60_000L;
+            long endMillis = dayStartMillis + allowedWindow.endMinute * 60_000L + 59_999L;
+            if (nowMillis >= startMillis && nowMillis <= endMillis) {
                 return targetMillis;
             }
         }
@@ -182,6 +238,7 @@ public final class PunchTimeResolver {
                 optionLabels,
                 nowMillis,
                 windowMinutes,
+                null,
                 TimeZone.getDefault()
         );
     }
@@ -190,12 +247,40 @@ public final class PunchTimeResolver {
                                                        long nowMillis,
                                                        int windowMinutes,
                                                        TimeZone timeZone) {
+        return findAllowedPunchOptionIndexes(optionLabels, nowMillis, windowMinutes, null, timeZone);
+    }
+
+    public static List<Integer> findAllowedPunchOptionIndexes(List<String> optionLabels,
+                                                              long nowMillis,
+                                                              int windowMinutes,
+                                                              List<String> overtimeSignOutOptions) {
+        return findAllowedPunchOptionIndexes(
+                optionLabels,
+                nowMillis,
+                windowMinutes,
+                overtimeSignOutOptions,
+                TimeZone.getDefault()
+        );
+    }
+
+    static List<Integer> findAllowedPunchOptionIndexes(List<String> optionLabels,
+                                                       long nowMillis,
+                                                       int windowMinutes,
+                                                       List<String> overtimeSignOutOptions,
+                                                       TimeZone timeZone) {
         List<Integer> indexes = new ArrayList<>();
         if (optionLabels == null || optionLabels.isEmpty()) {
             return indexes;
         }
         for (int i = 0; i < optionLabels.size(); i++) {
-            if (isWithinAllowedPunchTime(optionLabels.get(i), nowMillis, windowMinutes, timeZone)) {
+            if (isWithinAllowedPunchTime(
+                    optionLabels.get(i),
+                    nowMillis,
+                    windowMinutes,
+                    optionLabels,
+                    overtimeSignOutOptions,
+                    timeZone
+            )) {
                 indexes.add(i);
             }
         }
@@ -204,10 +289,16 @@ public final class PunchTimeResolver {
 
     public static WindowValidationResult validatePunchTimeWindows(List<String> timeRanges,
                                                                   int windowMinutes) {
+        return validatePunchTimeWindows(timeRanges, windowMinutes, null);
+    }
+
+    public static WindowValidationResult validatePunchTimeWindows(List<String> timeRanges,
+                                                                  int windowMinutes,
+                                                                  List<String> overtimeSignOutOptions) {
         if (timeRanges == null || timeRanges.isEmpty()) {
             return WindowValidationResult.ok();
         }
-        List<PunchWindow> windows = buildPunchWindows(timeRanges, windowMinutes);
+        List<PunchWindow> windows = buildPunchWindows(timeRanges, windowMinutes, overtimeSignOutOptions);
         for (int i = 0; i < windows.size(); i++) {
             PunchWindow left = windows.get(i);
             for (int j = i + 1; j < windows.size(); j++) {
@@ -223,33 +314,108 @@ public final class PunchTimeResolver {
         return WindowValidationResult.ok();
     }
 
-    private static List<PunchWindow> buildPunchWindows(List<String> timeRanges, int windowMinutes) {
+    private static List<PunchWindow> buildPunchWindows(List<String> timeRanges,
+                                                       int windowMinutes,
+                                                       List<String> overtimeSignOutOptions) {
         List<PunchWindow> windows = new ArrayList<>();
         int safeWindow = Math.max(0, windowMinutes);
+        List<String> optionLabels = buildPunchOptionLabels(timeRanges);
         for (String timeRange : timeRanges) {
             if (timeRange == null || timeRange.trim().isEmpty()) {
                 continue;
             }
             String rangeLabel = timeRange.trim();
-            String[] range = rangeLabel.split("-");
-            if (range.length != 2) {
+            PunchOption signInOption = parsePunchOption(rangeLabel + " \u4e0a\u73ed");
+            PunchOption signOutOption = parsePunchOption(rangeLabel + " \u4e0b\u73ed");
+            if (signInOption == null || signOutOption == null) {
                 continue;
             }
-            int startMinutes = parseMinutes(range[0]);
-            int endMinutes = parseMinutes(range[1]);
-            if (startMinutes < 0 || endMinutes < 0) {
-                continue;
-            }
-            boolean overnight = endMinutes <= startMinutes;
             for (int day = 0; day < 3; day++) {
-                int signInTarget = day * 1440 + startMinutes;
-                windows.add(PunchWindow.of(rangeLabel + " \u4e0a\u73ed", day, 0, signInTarget, safeWindow));
-
-                int signOutTarget = (day + (overnight ? 1 : 0)) * 1440 + endMinutes;
-                windows.add(PunchWindow.of(rangeLabel + " \u4e0b\u73ed", day, 1, signOutTarget, safeWindow));
+                windows.add(buildAllowedPunchWindow(
+                        signInOption,
+                        day,
+                        safeWindow,
+                        optionLabels,
+                        overtimeSignOutOptions
+                ));
+                windows.add(buildAllowedPunchWindow(
+                        signOutOption,
+                        day,
+                        safeWindow,
+                        optionLabels,
+                        overtimeSignOutOptions
+                ));
             }
         }
         return windows;
+    }
+
+    private static List<String> buildPunchOptionLabels(List<String> timeRanges) {
+        List<String> labels = new ArrayList<>();
+        if (timeRanges == null) {
+            return labels;
+        }
+        for (String timeRange : timeRanges) {
+            if (timeRange == null || timeRange.trim().isEmpty()) {
+                continue;
+            }
+            String rangeLabel = timeRange.trim();
+            labels.add(rangeLabel + " \u4e0a\u73ed");
+            labels.add(rangeLabel + " \u4e0b\u73ed");
+        }
+        return labels;
+    }
+
+    private static PunchWindow buildAllowedPunchWindow(PunchOption option,
+                                                       int dayOffset,
+                                                       int windowMinutes,
+                                                       List<String> optionLabels,
+                                                       List<String> overtimeSignOutOptions) {
+        int targetMinute = option.targetMinute(dayOffset);
+        int startMinute = targetMinute - windowMinutes;
+        int endMinute = targetMinute + windowMinutes;
+        if (option.signOut && isOvertimeSignOutEnabled(option.label, overtimeSignOutOptions)) {
+            int nextSignInStart = findNextSignInWindowStartMinute(optionLabels, targetMinute, windowMinutes);
+            if (nextSignInStart > Integer.MIN_VALUE) {
+                endMinute = Math.max(startMinute, nextSignInStart - 1);
+            }
+        }
+        return new PunchWindow(
+                option.label,
+                dayOffset,
+                option.signIn ? 0 : 1,
+                startMinute,
+                endMinute
+        );
+    }
+
+    private static int findNextSignInWindowStartMinute(List<String> optionLabels,
+                                                       int afterTargetMinute,
+                                                       int windowMinutes) {
+        int nextStart = Integer.MAX_VALUE;
+        if (optionLabels == null || optionLabels.isEmpty()) {
+            return Integer.MIN_VALUE;
+        }
+        for (String label : optionLabels) {
+            PunchOption option = parsePunchOption(label);
+            if (option == null || !option.signIn) {
+                continue;
+            }
+            for (int dayOffset = -1; dayOffset <= 4; dayOffset++) {
+                int signInWindowStart = option.targetMinute(dayOffset) - windowMinutes;
+                if (signInWindowStart > afterTargetMinute && signInWindowStart < nextStart) {
+                    nextStart = signInWindowStart;
+                }
+            }
+        }
+        return nextStart == Integer.MAX_VALUE ? Integer.MIN_VALUE : nextStart;
+    }
+
+    private static boolean isOvertimeSignOutEnabled(String optionLabel, List<String> overtimeSignOutOptions) {
+        if (optionLabel == null || overtimeSignOutOptions == null || overtimeSignOutOptions.isEmpty()) {
+            return false;
+        }
+        return overtimeSignOutOptions.contains(optionLabel.trim());
     }
 
     static int findAllowedPunchOptionIndex(List<String> optionLabels,
@@ -263,6 +429,57 @@ public final class PunchTimeResolver {
                 timeZone
         );
         return indexes.size() == 1 ? indexes.get(0) : -1;
+    }
+
+    private static PunchOption parsePunchOption(String optionLabel) {
+        if (optionLabel == null || optionLabel.trim().isEmpty()) {
+            return null;
+        }
+        String label = optionLabel.trim();
+        String[] parts = label.split("\\s+");
+        if (parts.length < 2) {
+            return null;
+        }
+        String[] range = parts[0].split("-");
+        if (range.length != 2) {
+            return null;
+        }
+        int startMinutes = parseMinutes(range[0]);
+        int endMinutes = parseMinutes(range[1]);
+        if (startMinutes < 0 || endMinutes < 0) {
+            return null;
+        }
+        boolean signIn = parts[1].contains("\u4e0a\u73ed");
+        boolean signOut = parts[1].contains("\u4e0b\u73ed");
+        if (!signIn && !signOut) {
+            return null;
+        }
+        return new PunchOption(label, startMinutes, endMinutes, signIn, signOut);
+    }
+
+    private static final class PunchOption {
+        final String label;
+        final int startMinutes;
+        final int endMinutes;
+        final boolean signIn;
+        final boolean signOut;
+        final boolean overnight;
+
+        private PunchOption(String label, int startMinutes, int endMinutes, boolean signIn, boolean signOut) {
+            this.label = label;
+            this.startMinutes = startMinutes;
+            this.endMinutes = endMinutes;
+            this.signIn = signIn;
+            this.signOut = signOut;
+            this.overnight = endMinutes <= startMinutes;
+        }
+
+        int targetMinute(int dayOffset) {
+            if (signIn) {
+                return dayOffset * 1440 + startMinutes;
+            }
+            return (dayOffset + (overnight ? 1 : 0)) * 1440 + endMinutes;
+        }
     }
 
     private static final class PunchWindow {

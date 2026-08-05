@@ -330,6 +330,84 @@ public class PunchTimeResolverTest {
         ));
     }
 
+    @Test
+    public void isWithinAllowedPunchTime_shouldExtendOvertimeSignOutUntilNextSignInWindowStart() {
+        List<String> options = Arrays.asList(
+                "08:00-17:00 \u4e0a\u73ed",
+                "08:00-17:00 \u4e0b\u73ed",
+                "22:00-06:00 \u4e0a\u73ed",
+                "22:00-06:00 \u4e0b\u73ed",
+                "\u81ea\u7531\u6253\u5361"
+        );
+        List<String> overtimeOptions = Collections.singletonList("08:00-17:00 \u4e0b\u73ed");
+
+        assertTrue(PunchTimeResolver.isWithinAllowedPunchTime(
+                "08:00-17:00 \u4e0b\u73ed",
+                millisAt(2026, Calendar.JULY, 1, 21, 39),
+                20,
+                options,
+                overtimeOptions,
+                SHANGHAI
+        ));
+        assertFalse(PunchTimeResolver.isWithinAllowedPunchTime(
+                "08:00-17:00 \u4e0b\u73ed",
+                millisAt(2026, Calendar.JULY, 1, 21, 40),
+                20,
+                options,
+                overtimeOptions,
+                SHANGHAI
+        ));
+        assertTrue(PunchTimeResolver.isWithinAllowedPunchTime(
+                "22:00-06:00 \u4e0a\u73ed",
+                millisAt(2026, Calendar.JULY, 1, 21, 40),
+                20,
+                options,
+                overtimeOptions,
+                SHANGHAI
+        ));
+    }
+
+    @Test
+    public void findAllowedPunchOptionIndexes_shouldAutoSelectOvertimeSignOutBeforeNextSignInWindow() {
+        List<String> options = Arrays.asList(
+                "08:00-17:00 \u4e0a\u73ed",
+                "08:00-17:00 \u4e0b\u73ed",
+                "22:00-06:00 \u4e0a\u73ed",
+                "22:00-06:00 \u4e0b\u73ed",
+                "\u81ea\u7531\u6253\u5361"
+        );
+
+        List<Integer> indexes = PunchTimeResolver.findAllowedPunchOptionIndexes(
+                options,
+                millisAt(2026, Calendar.JULY, 1, 20, 0),
+                20,
+                Collections.singletonList("08:00-17:00 \u4e0b\u73ed"),
+                SHANGHAI
+        );
+
+        assertEquals(Collections.singletonList(1), indexes);
+    }
+
+    @Test
+    public void isWithinAllowedPunchTime_shouldNotExtendSignOutWhenOvertimeDisabled() {
+        List<String> options = Arrays.asList(
+                "08:00-17:00 \u4e0a\u73ed",
+                "08:00-17:00 \u4e0b\u73ed",
+                "22:00-06:00 \u4e0a\u73ed",
+                "22:00-06:00 \u4e0b\u73ed",
+                "\u81ea\u7531\u6253\u5361"
+        );
+
+        assertFalse(PunchTimeResolver.isWithinAllowedPunchTime(
+                "08:00-17:00 \u4e0b\u73ed",
+                millisAt(2026, Calendar.JULY, 1, 20, 0),
+                20,
+                options,
+                Collections.emptyList(),
+                SHANGHAI
+        ));
+    }
+
     private long millisAt(int year, int month, int day, int hour, int minute) {
         Calendar calendar = Calendar.getInstance(SHANGHAI);
         calendar.set(Calendar.YEAR, year);

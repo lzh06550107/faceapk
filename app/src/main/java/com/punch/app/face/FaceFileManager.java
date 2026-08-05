@@ -3,13 +3,11 @@ package com.punch.app.face;
 import android.content.Context;
 import android.util.Log;
 
+import com.punch.app.network.ApiService;
+import com.punch.app.utils.SessionManager;
+
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.security.MessageDigest;
 
 
@@ -55,55 +53,61 @@ public class FaceFileManager {
     }
 
     
-    public static String downloadAndVerify(Context ctx, String empId,
-                                           String imageUrl, String expectedSha256) {
+    public static DownloadResult downloadAndVerify(Context ctx, String empId,
+                                                   String imageUrl, String expectedSha256) {
         File dir = ensureFacesDir(ctx);
         File dest = new File(dir, empId + ".jpg");
+        String safeUrl = imageUrl == null ? "" : imageUrl.trim();
+        if (safeUrl.isEmpty()) {
+            Log.w(TAG, "Face image url is empty for " + empId);
+            return DownloadResult.fail("人脸图片URL为空");
+        }
 
-        if (dest.exists() && expectedSha256 != null) {
+        if (dest.exists() && expectedSha256 != null && !expectedSha256.trim().isEmpty()) {
             String existing = sha256(dest);
-            if (expectedSha256.equalsIgnoreCase(existing)) {
-                return dest.getAbsolutePath();
+            if (expectedSha256.trim().equalsIgnoreCase(existing)) {
+                return DownloadResult.ok(dest.getAbsolutePath());
             }
         }
 
+        String resolvedUrl = resolveImageUrl(safeUrl);
+        boolean downloaded;
         try {
-            download(imageUrl, dest);
-        } catch (IOException e) {
-            Log.e(TAG, "Download failed: " + imageUrl, e);
-            return null;
+            downloaded = ApiService.downloadToFile(resolvedUrl, dest);
+        } catch (IllegalArgumentException e) {
+            Log.e(TAG, "Invalid face image url: empId=" + empId + " url=" + resolvedUrl, e);
+            return DownloadResult.fail("人脸图片URL无效");
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Face image download error: empId=" + empId + " url=" + resolvedUrl, e);
+            return DownloadResult.fail("人脸图片下载异常");
+        }
+        if (!downloaded) {
+            Log.w(TAG, "Face image download failed: empId=" + empId + " url=" + resolvedUrl);
+            return DownloadResult.fail("人脸图片下载失败");
         }
 
         if (expectedSha256 != null && !expectedSha256.isEmpty()) {
             String actual = sha256(dest);
-            if (!expectedSha256.equalsIgnoreCase(actual)) {
-                Log.w(TAG, "SHA256 mismatch for " + empId);
+            if (!expectedSha256.trim().equalsIgnoreCase(actual)) {
+                Log.w(TAG, "Face image SHA256 mismatch: empId=" + empId
+                        + " expected=" + expectedSha256.trim()
+                        + " actual=" + actual);
                 dest.delete();
-                return null;
+                return DownloadResult.fail("人脸图片校验失败");
             }
         }
-        return dest.getAbsolutePath();
+        return DownloadResult.ok(dest.getAbsolutePath());
     }
 
-    
-    private static void download(String urlStr, File dest) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-        conn.setConnectTimeout(10_000);
-        conn.setReadTimeout(30_000);
-        conn.connect();
-        if (conn.getResponseCode() != 200) {
-            throw new IOException("HTTP " + conn.getResponseCode());
+    private static String resolveImageUrl(String source) {
+        if (source.startsWith("http://") || source.startsWith("https://")) {
+            return source;
         }
-        try (InputStream in = conn.getInputStream();
-             FileOutputStream out = new FileOutputStream(dest)) {
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = in.read(buf)) != -1) {
-                out.write(buf, 0, n);
-            }
-        } finally {
-            conn.disconnect();
+        String baseUrl = SessionManager.get().getBaseUrl();
+        if (source.startsWith("/")) {
+            return baseUrl + source;
         }
+        return baseUrl + "/" + source;
     }
 
     
@@ -125,6 +129,26 @@ public class FaceFileManager {
             return sb.toString();
         } catch (Exception e) {
             return "";
+        }
+    }
+
+    public static final class DownloadResult {
+        public final boolean success;
+        public final String path;
+        public final String failMsg;
+
+        private DownloadResult(boolean success, String path, String failMsg) {
+            this.success = success;
+            this.path = path;
+            this.failMsg = failMsg == null ? "" : failMsg;
+        }
+
+        static DownloadResult ok(String path) {
+            return new DownloadResult(true, path, "");
+        }
+
+        static DownloadResult fail(String failMsg) {
+            return new DownloadResult(false, null, failMsg);
         }
     }
 }

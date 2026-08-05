@@ -15,6 +15,7 @@ public class FaceRegistrationManager {
     private static final String TAG = "FaceRegManager";
     private static final String FAIL_MSG_FACE_IMAGE_DOWNLOAD_FAILED = "人脸图片下载失败";
     private static final String FAIL_MSG_FACE_IMAGE_INVALID = "人脸图片不合格";
+    private static final String FAIL_MSG_FACE_IMAGE_URL_EMPTY = "人脸图片URL为空";
 
     private static FaceRegistrationManager instance;
 
@@ -95,23 +96,27 @@ public class FaceRegistrationManager {
 
     private RegistrationResult registerSingle(Context ctx, Employee emp, boolean addToRuntimeLibrary) {
         if (emp.faceImageUrl == null || emp.faceImageUrl.trim().isEmpty()) {
-            return RegistrationResult.fail(emp.id, FAIL_MSG_FACE_IMAGE_INVALID);
+            Log.w(TAG, "Face image url is empty: empId=" + emp.id);
+            return RegistrationResult.fail(emp.id, FAIL_MSG_FACE_IMAGE_URL_EMPTY);
         }
 
-        String localPath = FaceFileManager.downloadAndVerify(
+        FaceFileManager.DownloadResult downloadResult = FaceFileManager.downloadAndVerify(
                 ctx,
                 emp.id,
                 emp.faceImageUrl,
                 emp.faceImageSha256
         );
-        if (localPath == null) {
-            Log.w(TAG, "Download/verify failed: " + emp.id);
-            return RegistrationResult.fail(emp.id, FAIL_MSG_FACE_IMAGE_DOWNLOAD_FAILED);
+        if (!downloadResult.success) {
+            String failMsg = downloadResult.failMsg == null || downloadResult.failMsg.trim().isEmpty()
+                    ? FAIL_MSG_FACE_IMAGE_DOWNLOAD_FAILED
+                    : downloadResult.failMsg.trim();
+            Log.w(TAG, "Download/verify failed: empId=" + emp.id + " reason=" + failMsg);
+            return RegistrationResult.fail(emp.id, failMsg);
         }
 
         FaceManager.RegisterResult result = addToRuntimeLibrary
-                ? FaceManager.get().registerFace(ctx, emp.id, localPath)
-                : FaceManager.get().validateFaceImage(ctx, emp.id, localPath);
+                ? FaceManager.get().registerFace(ctx, emp.id, downloadResult.path)
+                : FaceManager.get().validateFaceImage(ctx, emp.id, downloadResult.path);
         if (result.success) {
             DatabaseHelper.get(ctx).updateFaceRegistration(emp.id, result.localFaceId, true);
             return RegistrationResult.ok(emp.id);
