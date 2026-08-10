@@ -206,6 +206,7 @@ public class ApiClient {
     }
 
     public static boolean downloadToFile(String url, File destination) {
+        long startedAt = System.currentTimeMillis();
         Request.Builder builder = new Request.Builder()
                 .url(url)
                 .addHeader("X-Device-Id", SessionManager.get().getDeviceId());
@@ -214,11 +215,32 @@ public class ApiClient {
 
         File parent = destination.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            logDownloadInteraction(
+                    request,
+                    0,
+                    false,
+                    "Unable to create destination directory",
+                    "",
+                    startedAt,
+                    destination
+            );
             return false;
         }
 
         try (Response response = getClient().newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
+                String responseInfo = response.body() == null
+                        ? "response_body_empty=true"
+                        : buildDownloadResponseInfo(response, 0L);
+                logDownloadInteraction(
+                        request,
+                        response.code(),
+                        false,
+                        response.body() == null ? "Response body is empty" : "HTTP " + response.code(),
+                        responseInfo,
+                        startedAt,
+                        destination
+                );
                 return false;
             }
 
@@ -234,6 +256,15 @@ public class ApiClient {
             }
         } catch (IOException e) {
             Log.e(TAG, "Download failed: " + e.getMessage());
+            logDownloadInteraction(
+                    request,
+                    0,
+                    false,
+                    e.getClass().getSimpleName() + ": " + safeString(e.getMessage()),
+                    "",
+                    startedAt,
+                    destination
+            );
             return false;
         }
     }
@@ -309,6 +340,64 @@ public class ApiClient {
         store.append(entry);
     }
 
+    private static void logDownloadInteraction(Request request,
+                                               int httpStatus,
+                                               boolean success,
+                                               String errorMessage,
+                                               String responseInfo,
+                                               long startedAt,
+                                               File destination) {
+        InteractionLogStore store = InteractionLogStore.get();
+        if (store == null || request == null) {
+            return;
+        }
+        InteractionLogEntry entry = new InteractionLogEntry();
+        entry.category = InteractionLogger.CATEGORY_NETWORK;
+        entry.group = InteractionLogger.resolveNetworkGroup(request.url().encodedPath());
+        entry.title = "下载文件";
+        entry.timeMillis = startedAt;
+        entry.method = request.method();
+        entry.url = request.url().toString();
+        entry.path = request.url().encodedPath();
+        if (request.url().encodedQuery() != null && !request.url().encodedQuery().isEmpty()) {
+            entry.path += "?" + request.url().encodedQuery();
+        }
+        entry.httpStatus = httpStatus;
+        entry.success = success;
+        entry.durationMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+        entry.errorMessage = errorMessage == null ? "" : errorMessage.trim();
+        entry.responseBody = appendDestinationInfo(responseInfo, destination);
+        store.append(entry);
+    }
+
+    private static String buildDownloadResponseInfo(Response response, long bytesWritten) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("bytes_written=").append(bytesWritten);
+        if (response != null && response.body() != null) {
+            builder.append("\ncontent_length=").append(response.body().contentLength());
+            if (response.body().contentType() != null) {
+                builder.append("\ncontent_type=").append(response.body().contentType());
+            }
+        }
+        return builder.toString();
+    }
+
+    private static String appendDestinationInfo(String responseInfo, File destination) {
+        StringBuilder builder = new StringBuilder();
+        if (responseInfo != null && !responseInfo.trim().isEmpty()) {
+            builder.append(responseInfo.trim());
+        }
+        if (destination != null) {
+            if (builder.length() > 0) {
+                builder.append('\n');
+            }
+            builder.append("destination=").append(destination.getAbsolutePath());
+            builder.append("\nfile_exists=").append(destination.exists());
+            builder.append("\nfile_size=").append(destination.exists() ? destination.length() : 0L);
+        }
+        return builder.toString();
+    }
+
     private static String bodyToString(RequestBody body) {
         if (body == null) {
             return "";
@@ -344,5 +433,9 @@ public class ApiClient {
             obj.addProperty("snap_image_length", snapImage.length());
         }
         return GSON.toJson(obj);
+    }
+
+    private static String safeString(String value) {
+        return value == null ? "" : value.trim();
     }
 }

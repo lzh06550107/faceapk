@@ -390,6 +390,7 @@ public class ConfigFragment extends Fragment {
             return;
         }
 
+        Context appContext = requireContext().getApplicationContext();
         executor.execute(() -> {
             ApiResult<DeviceDto.DeviceConfigData> result = ApiService.fetchDeviceConfig();
             if (!result.success || result.data == null || !isAdded()) {
@@ -397,6 +398,15 @@ public class ConfigFragment extends Fragment {
             }
             SessionManager.get().saveLineBindingOptions(result.data.lines);
             SessionManager.get().saveTeamBindingOptions(result.data.teams);
+            persistMissingBindingDefaults(result.data);
+            SessionManager.get().saveUpdateInfo(
+                    result.data.updateInfo.needUpdate || result.data.needUpdate,
+                    result.data.updateInfo.apkUrl,
+                    result.data.updateInfo.currentVersion,
+                    result.data.updateInfo.targetVersion,
+                    result.data.updateInfo.versionName
+            );
+            UpdateManager.startBackgroundUpdateIfEligible(appContext, "config_initial_fetch");
             requireActivity().runOnUiThread(() -> {
                 if (!isAdded()) {
                     return;
@@ -405,6 +415,71 @@ public class ConfigFragment extends Fragment {
                 renderConfig();
             });
         });
+    }
+
+    private void persistMissingBindingDefaults(DeviceDto.DeviceConfigData data) {
+        if (data == null) {
+            return;
+        }
+        if (isBlank(SessionManager.get().getLineCode())) {
+            DeviceDto.LineOptionData line = resolveDefaultLine(data);
+            if (line != null) {
+                SessionManager.get().saveLineBinding(line.code, line.name);
+            }
+        }
+        if (SessionManager.get().getTeamBindingId() <= 0) {
+            DeviceDto.TeamOptionData team = resolveDefaultTeam(data);
+            if (team != null && team.id > 0) {
+                SessionManager.get().saveTeamBindingId(team.id);
+                SessionManager.get().saveTeamBindingName(team.name);
+                SessionManager.get().saveCurrentTeamTimeRanges(team.timeRanges);
+            }
+        }
+    }
+
+    @Nullable
+    private DeviceDto.LineOptionData resolveDefaultLine(DeviceDto.DeviceConfigData data) {
+        if (!isBlank(data.lineCode) || !isBlank(data.lineName)) {
+            DeviceDto.LineOptionData line = new DeviceDto.LineOptionData();
+            line.code = safeString(data.lineCode).trim();
+            line.name = safeString(data.lineName).trim();
+            return line;
+        }
+        for (DeviceDto.LineOptionData line : data.lines) {
+            if (line != null && (!isBlank(line.code) || !isBlank(line.name))) {
+                return line;
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private DeviceDto.TeamOptionData resolveDefaultTeam(DeviceDto.DeviceConfigData data) {
+        if (data.teamBindingId > 0) {
+            for (DeviceDto.TeamOptionData team : data.teams) {
+                if (team != null && team.id == data.teamBindingId) {
+                    return team;
+                }
+            }
+            DeviceDto.TeamOptionData team = new DeviceDto.TeamOptionData();
+            team.id = data.teamBindingId;
+            team.name = safeString(data.teamBindingName).trim();
+            return team;
+        }
+        for (DeviceDto.TeamOptionData team : data.teams) {
+            if (team != null && team.id > 0) {
+                return team;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private static String safeString(String value) {
+        return value == null ? "" : value;
     }
 
     private void selectLineBinding(String lineCode) {

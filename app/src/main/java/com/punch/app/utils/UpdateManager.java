@@ -13,21 +13,165 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.annotation.Nullable;
 
 import com.punch.app.network.InteractionLogger;
+import com.punch.app.network.ApiService;
 import com.punch.app.receiver.UpdateInstallStateReceiver;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.OutputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class UpdateManager {
+    private static final String TAG = "UpdateManager";
     public static final String ACTION_PACKAGE_INSTALL_RESULT =
             "com.punch.app.action.PACKAGE_INSTALL_RESULT";
     private static final String EXTRA_INSTALL_RESULT =
             "android.intent.extra.INSTALL_RESULT";
     private static final int REQ_INSTALL_RESULT = 1001;
     private static final int BUFFER_SIZE = 64 * 1024;
+    private static final String AUTO_UPDATE_DIR = "updates";
+    private static final String AUTO_UPDATE_APK_NAME = "faceapk-auto-update.apk";
+    private static final long INSTALL_PENDING_TIMEOUT_MS = 30 * 60 * 1000L;
+    private static final ExecutorService AUTO_UPDATE_EXECUTOR = Executors.newSingleThreadExecutor();
+    private static final AtomicBoolean AUTO_UPDATE_RUNNING = new AtomicBoolean(false);
 
     private UpdateManager() {
+    }
+
+    public static boolean startBackgroundUpdateIfEligible(Context context, String reason) {
+        if (context == null) {
+            return false;
+        }
+        Context appContext = context.getApplicationContext();
+        reconcileInstallState(appContext);
+        clearTimedOutInstallPending(appContext);
+        String blockedReason = getAutoUpdateBlockedReason(appContext);
+        if (!blockedReason.isEmpty()) {
+            log("Auto update skipped", buildEligibilityDetail(appContext, blockedReason, reason));
+            return false;
+        }
+        if (!AUTO_UPDATE_RUNNING.compareAndSet(false, true)) {
+            log("Auto update skipped", "reason=already_running\ntrigger=" + safe(reason));
+            return false;
+        }
+        AUTO_UPDATE_EXECUTOR.execute(() -> {
+            try {
+                runBackgroundUpdate(appContext, reason);
+            } finally {
+                AUTO_UPDATE_RUNNING.set(false);
+            }
+        });
+        return true;
+    }
+
+    private static boolean shouldAttemptBackgroundUpdate(Context context) {
+        return getAutoUpdateBlockedReason(context).isEmpty();
+    }
+
+    private static String getAutoUpdateBlockedReason(Context context) {
+        SessionManager session = SessionManager.get();
+        if (session.isUpdateInstallPending()) {
+            return "install_pending";
+        }
+        String apkUrl = safe(session.getUpdateApkUrl());
+        if (apkUrl.isEmpty()) {
+            return "apk_url_empty";
+        }
+        String targetVersion = safe(session.getUpdateTargetVersion());
+        if (!targetVersion.isEmpty()) {
+            return compareVersions(resolveInstalledVersionName(context), targetVersion) < 0
+                    ? ""
+                    : "installed_version_not_lower_than_target";
+        }
+        return session.isUpdateNeeded() ? "" : "need_update_false";
+    }
+
+    private static void runBackgroundUpdate(Context context, String reason) {
+        reconcileInstallState(context);
+        if (SessionManager.get().isUpdateInstallPending()) {
+            log("Auto update skipped", "reason=install_pending\ntrigger=" + safe(reason));
+            return;
+        }
+        if (!KioskManager.isDeviceOwner(context)) {
+            logFailure(
+                    "Auto update skipped",
+                    "reason=device_not_owner\n"
+                            + "message=后台静默安装要求应用是 Device Owner\n"
+                            + "trigger=" + safe(reason)
+            );
+            return;
+        }
+        if (SessionManager.get().isKioskEnabled()) {
+            KioskManager.ensureOwnerKioskPolicies(context);
+        }
+
+        String apkUrl = resolveDownloadUrl(SessionManager.get().getUpdateApkUrl());
+        File apkFile = buildAutoUpdateApkFile(context);
+        if (apkFile == null) {
+            logFailure("Auto update download failed", "reason=update_dir_unavailable\ntrigger=" + safe(reason));
+            return;
+        }
+        if (apkFile.exists() && !apkFile.delete()) {
+            logFailure(
+                    "Auto update download failed",
+                    "reason=old_apk_delete_failed\npath=" + apkFile.getAbsolutePath()
+            );
+            return;
+        }
+
+        log(
+                "Auto update download started",
+                "trigger=" + safe(reason)
+                        + "\nurl=" + apkUrl
+                        + "\npath=" + apkFile.getAbsolutePath()
+        );
+        boolean downloaded;
+        try {
+            downloaded = ApiService.downloadToFile(apkUrl, apkFile);
+        } catch (RuntimeException e) {
+            String message = e.getClass().getSimpleName() + ": " + safe(e.getMessage());
+            logFailure("Auto update download crashed", message + "\nurl=" + apkUrl);
+            return;
+        }
+        if (!downloaded) {
+            logFailure("Auto update download failed", "url=" + apkUrl);
+            return;
+        }
+
+        ApkInstallValidator.Result validation =
+                ApkInstallValidator.validateUpdateApk(context, apkFile.getAbsolutePath());
+        if (!validation.success) {
+            markFailed(validation.message, Integer.MIN_VALUE);
+            logFailure(
+                    "Auto update APK validation failed",
+                    validation.message + "\napkPath=" + apkFile.getAbsolutePath()
+            );
+            return;
+        }
+
+        String targetVersion = !TextUtils.isEmpty(validation.versionName)
+                ? validation.versionName
+                : safe(SessionManager.get().getUpdateTargetVersion());
+        SessionManager.get().markUpdateInstallStarted(
+                apkFile.getAbsolutePath(),
+                targetVersion,
+                validation.versionCode
+        );
+        log(
+                "Auto update APK validation passed",
+                "package=" + validation.packageName
+                        + "\nversionName=" + targetVersion
+                        + "\nversionCode=" + validation.versionCode
+                        + "\nsize=" + validation.fileSize
+                        + "\napkPath=" + apkFile.getAbsolutePath()
+        );
+
+        StartResult result = installWithPackageInstaller(context, apkFile.getAbsolutePath(), validation);
+        if (!result.success) {
+            logFailure("Auto update install submit failed", result.message);
+        }
     }
 
     public static StartResult startInstall(
@@ -168,6 +312,34 @@ public final class UpdateManager {
                 "version=" + safe(version)
                         + "\ntargetVersionCode="
                         + SessionManager.get().getUpdateInstallTargetVersionCode());
+    }
+
+    private static void clearTimedOutInstallPending(Context context) {
+        if (!SessionManager.get().isUpdateInstallPending()) {
+            return;
+        }
+        if (isInstalledVersionAtTarget(context)) {
+            return;
+        }
+        long startedAt = SessionManager.get().getUpdateInstallStartedAt();
+        long elapsed = startedAt > 0L ? System.currentTimeMillis() - startedAt : Long.MAX_VALUE;
+        if (elapsed < INSTALL_PENDING_TIMEOUT_MS) {
+            return;
+        }
+        String message = "Install result timed out";
+        SessionManager.get().markUpdateInstallResult(
+                Constants.UPDATE_INSTALL_STATUS_FAILED,
+                message,
+                Integer.MIN_VALUE
+        );
+        logFailure(
+                "Install pending state cleared",
+                "reason=timeout\nelapsedMs=" + elapsed
+                        + "\ntargetVersion="
+                        + safe(SessionManager.get().getUpdateInstallTargetVersion())
+                        + "\ntargetVersionCode="
+                        + SessionManager.get().getUpdateInstallTargetVersionCode()
+        );
     }
 
     public static boolean isInstalledVersionAtTarget(Context context) {
@@ -364,12 +536,53 @@ public final class UpdateManager {
         }
     }
 
+    private static String resolveDownloadUrl(String rawUrl) {
+        String url = safe(rawUrl);
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            return url;
+        }
+        String baseUrl = safe(SessionManager.get().getBaseUrl());
+        if (url.startsWith("/")) {
+            return baseUrl + url;
+        }
+        return baseUrl + "/" + url;
+    }
+
+    private static File buildAutoUpdateApkFile(Context context) {
+        if (context == null) {
+            return null;
+        }
+        File updateDir = new File(context.getFilesDir(), AUTO_UPDATE_DIR);
+        if (!updateDir.exists() && !updateDir.mkdirs()) {
+            return null;
+        }
+        return new File(updateDir, AUTO_UPDATE_APK_NAME);
+    }
+
     private static void log(String title, String detail) {
+        AppLogger.i(TAG, title + " | " + compact(detail));
         InteractionLogger.logBusiness(InteractionLogger.GROUP_UPDATE, title, detail);
     }
 
     private static void logFailure(String title, String detail) {
+        AppLogger.e(TAG, title + " | " + compact(detail));
         InteractionLogger.logBusinessFailure(InteractionLogger.GROUP_UPDATE, title, detail);
+    }
+
+    private static String buildEligibilityDetail(Context context, String reason, String trigger) {
+        SessionManager session = SessionManager.get();
+        return "reason=" + safe(reason)
+                + "\ntrigger=" + safe(trigger)
+                + "\ninstalledVersion=" + safe(resolveInstalledVersionName(context))
+                + "\nneedUpdate=" + session.isUpdateNeeded()
+                + "\napkUrlEmpty=" + safe(session.getUpdateApkUrl()).isEmpty()
+                + "\ntargetVersion=" + safe(session.getUpdateTargetVersion())
+                + "\ninstallPending=" + session.isUpdateInstallPending();
+    }
+
+    private static String compact(String value) {
+        String text = safe(value).replace('\n', ';');
+        return text.length() > 1000 ? text.substring(0, 1000) + "..." : text;
     }
 
     private static String safe(String value) {

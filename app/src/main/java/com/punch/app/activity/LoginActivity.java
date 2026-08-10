@@ -20,14 +20,17 @@ import com.punch.app.network.dto.AuthDto;
 import com.punch.app.network.dto.DeviceDto;
 import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.service.SyncService;
+import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
+import com.punch.app.utils.UpdateManager;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.List;
 
 public class LoginActivity extends AppCompatActivity {
+    private static final String TAG = "LoginActivity";
     private static final long UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS = 1_500L;
     private static final String DEFAULT_ACCOUNT = "admin";
     private static final String DEFAULT_PASSWORD = "a123456!";
@@ -179,8 +182,14 @@ public class LoginActivity extends AppCompatActivity {
                 ApiResult<DeviceDto.DeviceConfigData> configResult = ApiService.fetchDeviceConfig();
                 if (!configResult.success || configResult.data == null) {
                     SessionManager.get().clearLoginState();
-                    reportStatusEvent("\u8bbe\u5907\u914d\u7f6e\u540c\u6b65\u5931\u8d25", PunchApplication.STATUS_LEVEL_ERROR);
-                    error = "\u83b7\u53d6\u914d\u7f6e\u5931\u8d25";
+                    String configError = buildApiFailureMessage("\u83b7\u53d6\u914d\u7f6e\u5931\u8d25", configResult);
+                    AppLogger.e(TAG, "Device config sync failed after login: "
+                            + buildApiFailureDetail(configResult));
+                    reportStatusEvent(
+                            "\u8bbe\u5907\u914d\u7f6e\u540c\u6b65\u5931\u8d25: " + buildApiFailureDetail(configResult),
+                            PunchApplication.STATUS_LEVEL_ERROR
+                    );
+                    error = configError;
                 } else {
                     configData = configResult.data;
                     reportStatusEvent("\u8bbe\u5907\u914d\u7f6e\u540c\u6b65\u5b8c\u6210", PunchApplication.STATUS_LEVEL_SUCCESS);
@@ -220,16 +229,19 @@ public class LoginActivity extends AppCompatActivity {
         SessionManager.get().saveDeviceConfigInitialized(true);
         SessionManager.get().saveLineBindingOptions(configData.lines);
         SessionManager.get().saveTeamBindingOptions(configData.teams);
-        if (!configData.lineCode.isEmpty() || !configData.lineName.isEmpty()) {
-            SessionManager.get().saveLineBinding(configData.lineCode, configData.lineName);
+        DeviceDto.LineOptionData line = resolveDefaultLine(configData);
+        if (line != null) {
+            SessionManager.get().saveLineBinding(line.code, line.name);
         }
-        if (configData.teamBindingId > 0) {
-            SessionManager.get().saveTeamBindingId(configData.teamBindingId);
+
+        DeviceDto.TeamOptionData team = resolveDefaultTeam(configData);
+        if (team != null && team.id > 0) {
+            SessionManager.get().saveTeamBindingId(team.id);
+            SessionManager.get().saveTeamBindingName(team.name);
+            SessionManager.get().saveCurrentTeamTimeRanges(team.timeRanges);
+        } else {
+            SessionManager.get().saveCurrentTeamTimeRanges(resolveTeamTimeRanges(configData));
         }
-        if (!configData.teamBindingName.isEmpty()) {
-            SessionManager.get().saveTeamBindingName(configData.teamBindingName);
-        }
-        SessionManager.get().saveCurrentTeamTimeRanges(resolveTeamTimeRanges(configData));
         SessionManager.get().saveCheckCount(configData.checkCount);
         if (!configData.account.isEmpty()) {
             SessionManager.get().saveAccount(configData.account);
@@ -244,6 +256,7 @@ public class LoginActivity extends AppCompatActivity {
                 configData.updateInfo.targetVersion,
                 configData.updateInfo.versionName
         );
+        UpdateManager.startBackgroundUpdateIfEligible(this, "login_device_config");
         if (configData.matchThreshold != null) {
             SessionManager.get().saveMatchThreshold(configData.matchThreshold);
         }
@@ -296,6 +309,55 @@ public class LoginActivity extends AppCompatActivity {
         return java.util.Collections.emptyList();
     }
 
+    private DeviceDto.LineOptionData resolveDefaultLine(DeviceDto.DeviceConfigData configData) {
+        if (configData == null) {
+            return null;
+        }
+        if (!isBlank(configData.lineCode) || !isBlank(configData.lineName)) {
+            DeviceDto.LineOptionData line = new DeviceDto.LineOptionData();
+            line.code = safeString(configData.lineCode).trim();
+            line.name = safeString(configData.lineName).trim();
+            return line;
+        }
+        for (DeviceDto.LineOptionData line : configData.lines) {
+            if (line != null && (!isBlank(line.code) || !isBlank(line.name))) {
+                return line;
+            }
+        }
+        return null;
+    }
+
+    private DeviceDto.TeamOptionData resolveDefaultTeam(DeviceDto.DeviceConfigData configData) {
+        if (configData == null) {
+            return null;
+        }
+        if (configData.teamBindingId > 0) {
+            for (DeviceDto.TeamOptionData team : configData.teams) {
+                if (team != null && team.id == configData.teamBindingId) {
+                    return team;
+                }
+            }
+            DeviceDto.TeamOptionData team = new DeviceDto.TeamOptionData();
+            team.id = configData.teamBindingId;
+            team.name = safeString(configData.teamBindingName).trim();
+            return team;
+        }
+        for (DeviceDto.TeamOptionData team : configData.teams) {
+            if (team != null && team.id > 0) {
+                return team;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private static String safeString(String value) {
+        return value == null ? "" : value;
+    }
+
     private void setLoading(boolean loading, String message) {
         progress.setVisibility(loading ? View.VISIBLE : View.GONE);
         btnLogin.setEnabled(!loading);
@@ -315,6 +377,27 @@ public class LoginActivity extends AppCompatActivity {
     private void showError(String msg) {
         tvError.setText(msg);
         tvError.setVisibility(View.VISIBLE);
+    }
+
+    private static String buildApiFailureMessage(String fallback, ApiResult<?> result) {
+        if (result == null) {
+            return fallback;
+        }
+        String message = result.message == null ? "" : result.message.trim();
+        if (!message.isEmpty()) {
+            return fallback + ": " + message + " (code=" + result.code + ")";
+        }
+        return fallback + " (code=" + result.code + ", dataNull=" + (result.data == null) + ")";
+    }
+
+    private static String buildApiFailureDetail(ApiResult<?> result) {
+        if (result == null) {
+            return "result=null";
+        }
+        return "success=" + result.success
+                + ", code=" + result.code
+                + ", message=" + (result.message == null ? "" : result.message.trim())
+                + ", dataNull=" + (result.data == null);
     }
 
     private void updateLoadingStatus(String message) {

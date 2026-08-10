@@ -21,6 +21,7 @@ import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
 import com.punch.app.utils.PunchTimeResolver;
 import com.punch.app.utils.SessionManager;
+import com.punch.app.utils.UpdateManager;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -359,6 +360,7 @@ public final class SyncCoordinator {
         }
 
         applyDeviceConfig(result.data, true);
+        UpdateManager.startBackgroundUpdateIfEligible(context, "device_config_sync");
         if (app != null) {
             app.reportStatusEvent("\u8bbe\u5907\u914d\u7f6e\u5df2\u66f4\u65b0", PunchApplication.STATUS_LEVEL_SUCCESS);
         }
@@ -399,18 +401,41 @@ public final class SyncCoordinator {
         SessionManager.get().saveDeviceConfigInitialized(true);
         SessionManager.get().saveLineBindingOptions(data.lines);
         SessionManager.get().saveTeamBindingOptions(data.teams);
-        if (!preserveLocalBindings && (!isBlank(data.lineCode) || !isBlank(data.lineName))) {
-            SessionManager.get().saveLineBinding(data.lineCode, data.lineName);
+        boolean missingLocalLine = isBlank(SessionManager.get().getLineCode());
+        boolean missingLocalTeam = SessionManager.get().getTeamBindingId() <= 0;
+
+        if (!preserveLocalBindings || missingLocalLine) {
+            DeviceDto.LineOptionData line = resolveLineBinding(data);
+            if (line != null) {
+                SessionManager.get().saveLineBinding(line.code, line.name);
+                if (missingLocalLine) {
+                    AppLogger.i(TAG, "Recovered missing line binding from device config: code="
+                            + safeString(line.code) + ", name=" + safeString(line.name));
+                }
+            }
         }
-        if (!preserveLocalBindings && data.teamBindingId > 0) {
-            SessionManager.get().saveTeamBindingId(data.teamBindingId);
+
+        int effectiveTeamBindingId = SessionManager.get().getTeamBindingId();
+        if (!preserveLocalBindings || missingLocalTeam) {
+            DeviceDto.TeamOptionData team = resolveTeamBinding(data);
+            if (team != null && team.id > 0) {
+                SessionManager.get().saveTeamBindingId(team.id);
+                SessionManager.get().saveTeamBindingName(team.name);
+                SessionManager.get().saveCurrentTeamTimeRanges(team.timeRanges);
+                effectiveTeamBindingId = team.id;
+                if (missingLocalTeam) {
+                    AppLogger.i(TAG, "Recovered missing team binding from device config: id="
+                            + team.id + ", name=" + safeString(team.name));
+                }
+            }
         }
-        if (!preserveLocalBindings && !isBlank(data.teamBindingName)) {
+        if (!preserveLocalBindings && !isBlank(data.teamBindingName)
+                && SessionManager.get().getTeamBindingName().trim().isEmpty()) {
             SessionManager.get().saveTeamBindingName(data.teamBindingName);
         }
         SessionManager.get().saveCurrentTeamTimeRanges(resolveTeamTimeRanges(
                 data,
-                preserveLocalBindings ? SessionManager.get().getTeamBindingId() : data.teamBindingId
+                effectiveTeamBindingId
         ));
         SessionManager.get().saveCheckCount(data.checkCount);
         if (!isBlank(data.account)) {
@@ -444,6 +469,47 @@ public final class SyncCoordinator {
         if (!isBlank(data.recognitionDistanceMode)) {
             SessionManager.get().saveRecognitionDistanceMode(data.recognitionDistanceMode);
         }
+    }
+
+    private DeviceDto.LineOptionData resolveLineBinding(DeviceDto.DeviceConfigData data) {
+        if (data == null) {
+            return null;
+        }
+        if (!isBlank(data.lineCode) || !isBlank(data.lineName)) {
+            DeviceDto.LineOptionData line = new DeviceDto.LineOptionData();
+            line.code = safeString(data.lineCode).trim();
+            line.name = safeString(data.lineName).trim();
+            return line;
+        }
+        for (DeviceDto.LineOptionData line : data.lines) {
+            if (line != null && (!isBlank(line.code) || !isBlank(line.name))) {
+                return line;
+            }
+        }
+        return null;
+    }
+
+    private DeviceDto.TeamOptionData resolveTeamBinding(DeviceDto.DeviceConfigData data) {
+        if (data == null) {
+            return null;
+        }
+        if (data.teamBindingId > 0) {
+            for (DeviceDto.TeamOptionData team : data.teams) {
+                if (team != null && team.id == data.teamBindingId) {
+                    return team;
+                }
+            }
+            DeviceDto.TeamOptionData team = new DeviceDto.TeamOptionData();
+            team.id = data.teamBindingId;
+            team.name = safeString(data.teamBindingName).trim();
+            return team;
+        }
+        for (DeviceDto.TeamOptionData team : data.teams) {
+            if (team != null && team.id > 0) {
+                return team;
+            }
+        }
+        return null;
     }
 
     private EmployeeSyncProcessingResult syncEmployeesInternal(Context context, boolean collectEventResults) {

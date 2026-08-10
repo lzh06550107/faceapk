@@ -40,6 +40,7 @@ import java.util.concurrent.Executors;
 
 public class RecordsFragment extends Fragment {
     private static final int PAGE_SIZE = 20;
+    private static final long MIN_AUTO_REFRESH_INTERVAL_MS = 5_000L;
     private static final String FREE_PUNCH_OPTION_LABEL = "\u81ea\u7531\u6253\u5361";
     private static final String PUNCH_TYPE_FREE = "free";
     private static final String UNSCHEDULED_PUNCH_OPTION_LABEL = "\u672a\u914d\u7f6e\u73ed\u6b21";
@@ -78,6 +79,7 @@ public class RecordsFragment extends Fragment {
     private PunchOption selectedPunchOption;
     private StatusOption selectedStatusOption;
     private String selectedDate;
+    private long lastAutoRefreshAt;
 
     @Nullable
     @Override
@@ -193,6 +195,15 @@ public class RecordsFragment extends Fragment {
     public void onResume() {
         super.onResume();
         rebuildPunchOptions();
+        maybeAutoRefresh();
+    }
+
+    private void maybeAutoRefresh() {
+        long now = System.currentTimeMillis();
+        if (now - lastAutoRefreshAt < MIN_AUTO_REFRESH_INTERVAL_MS) {
+            return;
+        }
+        lastAutoRefreshAt = now;
         refresh();
     }
 

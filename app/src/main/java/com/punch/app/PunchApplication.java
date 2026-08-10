@@ -17,6 +17,7 @@ import com.punch.app.service.SyncCoordinator;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
+import com.punch.app.utils.UpdateManager;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -138,6 +139,7 @@ public class PunchApplication extends Application {
             initFaceSDK();
             preparePunchRecognitionData();
             startSyncService(); // 心跳/同步只在 token 有效时启动
+            UpdateManager.startBackgroundUpdateIfEligible(this, "app_start");
         }
     }
 
@@ -177,7 +179,9 @@ public class PunchApplication extends Application {
                 kioskForegroundWatchdogRunning = false;
                 return;
             }
-            KioskManager.bringExistingAppTaskToFrontQuietly(PunchApplication.this, -1);
+            if (resumedNonHomeActivityCount <= 0) {
+                KioskManager.bringExistingAppTaskToFrontQuietly(PunchApplication.this, -1);
+            }
             mainHandler.postDelayed(this, KIOSK_FOREGROUND_WATCHDOG_INTERVAL_MS);
         }
     };

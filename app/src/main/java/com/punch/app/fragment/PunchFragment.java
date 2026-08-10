@@ -1625,7 +1625,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     }
 
     private boolean isSelectedPunchOptionWithinAllowedTime() {
-        if (isSelectedFreePunch()) {
+        if (isSelectedFreePunch() || specialTimeEnabled) {
             return true;
         }
         return PunchTimeResolver.isWithinAllowedPunchTime(
@@ -1822,6 +1822,11 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             return;
         }
 
+        if (isBlank(lineCode) || teamBindingId <= 0) {
+            showMissingBindingConfigFailure(snapshot, lineCode, teamBindingId);
+            return;
+        }
+
         if (shouldBlockPunchByCheckCount(emp.id, punchDate, lineCode, teamBindingId, clockIndex)) {
             showCheckCountLimitReached(emp, snapshot);
             return;
@@ -2000,6 +2005,24 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     private String safeString(String value) {
         return value == null ? "" : value;
+    }
+
+    private void showMissingBindingConfigFailure(@Nullable PunchSnapshotHelper.Snapshot snapshot,
+                                                 String lineCode,
+                                                 int teamBindingId) {
+        String message = "\u6253\u5361\u914d\u7f6e\u4e0d\u5b8c\u6574\n\u8bf7\u5148\u540c\u6b65\u8bbe\u5907\u914d\u7f6e\u6216\u4fdd\u5b58\u7ebf\u4f53/\u73ed\u7ec4\u7ed1\u5b9a";
+        AppLogger.w(TAG, "Punch blocked by missing binding config: lineCode="
+                + safeString(lineCode) + ", teamBindingId=" + teamBindingId);
+        InteractionLogger.logBusinessFailure(
+                InteractionLogger.GROUP_PUNCH,
+                "\u6253\u5361\u914d\u7f6e\u7f3a\u5931",
+                "line_binding_code=" + safeString(lineCode)
+                        + "\nteam_binding=" + teamBindingId
+        );
+        showTransientFailureResult(message);
+        if (snapshot != null) {
+            uiHandler.postDelayed(() -> PunchSnapshotHelper.deleteSnapshot(snapshot.path), RESULT_DISPLAY_MS);
+        }
     }
 
     

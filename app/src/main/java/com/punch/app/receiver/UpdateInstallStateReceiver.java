@@ -120,6 +120,9 @@ public class UpdateInstallStateReceiver extends BroadcastReceiver {
             return;
         }
         try {
+            if (!SessionManager.get().isUpdateAutoLaunchScheduled()) {
+                return;
+            }
             SessionManager.get().markUpdateAutoLaunchCompleted();
             AlarmManager alarmManager =
                     (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
