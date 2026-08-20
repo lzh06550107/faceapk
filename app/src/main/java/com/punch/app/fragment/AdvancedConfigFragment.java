@@ -961,7 +961,7 @@ public class AdvancedConfigFragment extends Fragment {
             clearingDeviceOwner = false;
             InteractionLogger.logBusiness(
                     InteractionLogger.GROUP_GENERAL,
-                    "瑙ｉ櫎 Device Owner 鎴愬姛",
+                    "解除 Device Owner 成功",
                     "ownerCleared=" + ownerCleared + ", adminCleared=" + adminCleared
             );
             if (isAdded()) {
@@ -977,7 +977,7 @@ public class AdvancedConfigFragment extends Fragment {
             clearingDeviceOwner = false;
             InteractionLogger.logBusinessFailure(
                     InteractionLogger.GROUP_GENERAL,
-                    "瑙ｉ櫎 Device Owner 瓒呮椂",
+                    "解除 Device Owner 超时",
                     "ownerCleared=" + ownerCleared + ", adminCleared=" + adminCleared
             );
             if (isAdded()) {
@@ -996,7 +996,7 @@ public class AdvancedConfigFragment extends Fragment {
 
         InteractionLogger.logBusiness(
                 InteractionLogger.GROUP_GENERAL,
-                "缁х画绛夊緟 Device Owner 绉婚櫎",
+                "继续等待 Device Owner 移除",
                 "ownerCleared=" + ownerCleared + ", adminCleared=" + adminCleared
         );
         scheduleClearDeviceOwnerStateCheck(CLEAR_DEVICE_OWNER_POLL_INTERVAL_MS);
