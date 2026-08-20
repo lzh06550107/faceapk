@@ -28,6 +28,7 @@ import com.punch.app.network.dto.AuthDto;
 import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncService;
+import com.punch.app.service.SyncTrigger;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 
@@ -51,7 +52,7 @@ public class MainActivity extends AppCompatActivity {
             boolean online = isNetworkAvailable();
             updateBanner(online);
             if (online && wasOffline && SessionManager.get().isTokenValid()) {
-                SyncService.triggerSync(MainActivity.this);
+                SyncService.triggerSync(MainActivity.this, SyncTrigger.NETWORK_RESTORED);
             }
             wasOffline = !online;
         }
@@ -77,7 +78,6 @@ public class MainActivity extends AppCompatActivity {
                 showFragment(punchFragment);
             } else if (id == R.id.nav_records) {
                 showFragment(recordsFragment);
-                recordsFragment.refresh();
             } else if (id == R.id.nav_config) {
                 showFragment(configFragment);
             }
@@ -88,7 +88,7 @@ public class MainActivity extends AppCompatActivity {
 
         updateBanner(isNetworkAvailable());
         if (SessionManager.get().isTokenValid()) {
-            SyncService.triggerSync(this);
+            SyncService.triggerSync(this, SyncTrigger.APP_START);
         }
         if (SessionManager.get().isTokenNearExpiry()) {
             refreshTokenAsync();
@@ -147,11 +147,17 @@ public class MainActivity extends AppCompatActivity {
             transaction.add(R.id.fragment_container, fragment);
         }
         if (currentFragment != null && currentFragment != fragment) {
+            if (currentFragment == recordsFragment) {
+                recordsFragment.onPanelExited();
+            }
             transaction.hide(currentFragment);
         }
         transaction.show(fragment);
         transaction.commitAllowingStateLoss();
         currentFragment = fragment;
+        if (fragment == recordsFragment) {
+            recordsFragment.onPanelEntered();
+        }
     }
 
     private void updateBanner(boolean online) {

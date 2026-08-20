@@ -41,7 +41,7 @@ public final class HeartbeatManager {
         }
         scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleWithFixedDelay(
-                () -> SyncCoordinator.get().enqueueHeartbeatCycle(appContext),
+                () -> SyncCoordinator.get().enqueueHeartbeatCycle(appContext, SyncTrigger.HEARTBEAT),
                 Constants.HEARTBEAT_INITIAL_DELAY_MS,
                 Constants.HEARTBEAT_INTERVAL_MS,
                 TimeUnit.MILLISECONDS
@@ -56,23 +56,26 @@ public final class HeartbeatManager {
     }
 
     public void triggerNow() {
-        triggerNow(false);
+        triggerNow(SyncTrigger.AFTER_PUNCH);
     }
 
     public void triggerNow(boolean forcePunchRetry) {
+        triggerNow(forcePunchRetry ? SyncTrigger.MANUAL : SyncTrigger.AFTER_PUNCH);
+    }
+
+    public void triggerNow(SyncTrigger trigger) {
         if (!SessionManager.get().isTokenValid()) {
             AppLogger.d(TAG, "Skip triggerNow: token missing or expired");
             return;
         }
+        SyncTrigger safeTrigger = trigger != null ? trigger : SyncTrigger.AFTER_PUNCH;
         start();
         InteractionLogger.logBusiness(
                 InteractionLogger.GROUP_HEARTBEAT,
                 "立即触发心跳同步",
-                forcePunchRetry
-                        ? "由应用主动触发一次心跳检查，并允许重试历史打卡记录"
-                        : "由应用主动触发一次心跳检查"
+                "trigger=" + safeTrigger.name()
         );
-        SyncCoordinator.get().enqueueHeartbeatCycle(appContext, forcePunchRetry);
+        SyncCoordinator.get().enqueueHeartbeatCycle(appContext, safeTrigger);
     }
 
     public synchronized void stop() {

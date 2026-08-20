@@ -11,13 +11,13 @@ import com.punch.app.utils.SessionManager;
 
 public class SyncService extends Service {
     public static final String ACTION_SYNC_NOW = "com.punch.app.SYNC_NOW";
-    public static final String EXTRA_FORCE_PUNCH_RETRY = "force_punch_retry";
+    public static final String EXTRA_SYNC_TRIGGER = "sync_trigger";
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_SYNC_NOW.equals(intent.getAction())) {
             HeartbeatManager.get(getApplicationContext()).triggerNow(
-                    intent.getBooleanExtra(EXTRA_FORCE_PUNCH_RETRY, false)
+                    parseTrigger(intent.getStringExtra(EXTRA_SYNC_TRIGGER))
             );
         }
         return START_NOT_STICKY;
@@ -30,18 +30,34 @@ public class SyncService extends Service {
     }
 
     public static void triggerSync(Context context) {
-        triggerSync(context, false);
+        triggerSync(context, SyncTrigger.AFTER_PUNCH);
     }
 
     public static void triggerSync(Context context, boolean forcePunchRetry) {
+        triggerSync(context, forcePunchRetry ? SyncTrigger.MANUAL : SyncTrigger.AFTER_PUNCH);
+    }
+
+    public static void triggerSync(Context context, SyncTrigger trigger) {
         if (!SessionManager.get().isTokenValid()) {
             return;
         }
+        SyncTrigger safeTrigger = trigger != null ? trigger : SyncTrigger.AFTER_PUNCH;
         Context appContext = context.getApplicationContext();
         HeartbeatManager.get(appContext).start();
         Intent intent = new Intent(appContext, SyncService.class);
         intent.setAction(ACTION_SYNC_NOW);
-        intent.putExtra(EXTRA_FORCE_PUNCH_RETRY, forcePunchRetry);
+        intent.putExtra(EXTRA_SYNC_TRIGGER, safeTrigger.name());
         appContext.startService(intent);
+    }
+
+    private static SyncTrigger parseTrigger(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return SyncTrigger.AFTER_PUNCH;
+        }
+        try {
+            return SyncTrigger.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            return SyncTrigger.AFTER_PUNCH;
+        }
     }
 }

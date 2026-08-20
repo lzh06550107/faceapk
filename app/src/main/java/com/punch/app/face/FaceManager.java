@@ -122,14 +122,23 @@ public class FaceManager {
             return false;
         }
 
-        List<Employee> employees = DatabaseHelper.get(context).getAllActiveEmployees();
+        DatabaseHelper db = DatabaseHelper.get(context);
+        List<Employee> employees = db.getAllActiveEmployees();
         List<FaceLibraryEntry> entries = new ArrayList<>();
         for (Employee emp : employees) {
             if (emp.faceRegistered == 1 && emp.localFaceId != null && emp.faceImageUrl != null) {
                 String imagePath = FaceFileManager.getFaceImagePath(context, emp.id);
                 byte[] feature = extractFeatureFromFile(imagePath, emp.id);
                 if (feature != null) {
-                    entries.add(new FaceLibraryEntry(emp.id, feature));
+                    try {
+                        entries.add(new FaceLibraryEntry(
+                                emp.id,
+                                db.getOrCreateFaceSdkId(emp.id),
+                                feature));
+                    } catch (RuntimeException e) {
+                        AppLogger.e(TAG, "Face SDK ID allocation failed: empId="
+                                + safeEmpId(emp.id) + " error=" + e.getMessage());
+                    }
                 }
             }
         }
@@ -139,10 +148,9 @@ public class FaceManager {
             empToIntId.clear();
             intToEmpId.clear();
             for (FaceLibraryEntry entry : entries) {
-                int intId = toIntId(entry.empId);
-                faceSearch.pushPersonById(intId, entry.feature);
-                empToIntId.put(entry.empId, intId);
-                intToEmpId.put(intId, entry.empId);
+                faceSearch.pushPersonById(entry.sdkId, entry.feature);
+                empToIntId.put(entry.empId, entry.sdkId);
+                intToEmpId.put(entry.sdkId, entry.empId);
             }
             loadedFaceCount = entries.size();
             Log.i(TAG, "rebuildFaceLibrary: " + entries.size() + " faces loaded");
@@ -151,14 +159,17 @@ public class FaceManager {
     }
 
     public RegisterResult registerFace(Context context, String empId, String imageFilePath) {
-        return registerFaceInternal(empId, imageFilePath, true);
+        return registerFaceInternal(context, empId, imageFilePath, true);
     }
 
     public RegisterResult validateFaceImage(Context context, String empId, String imageFilePath) {
-        return registerFaceInternal(empId, imageFilePath, false);
+        return registerFaceInternal(context, empId, imageFilePath, false);
     }
 
-    private RegisterResult registerFaceInternal(String empId, String imageFilePath, boolean addToRuntimeLibrary) {
+    private RegisterResult registerFaceInternal(Context context,
+                                                  String empId,
+                                                  String imageFilePath,
+                                                  boolean addToRuntimeLibrary) {
         if (!initialized) {
             return RegisterResult.fail(ERROR_FACE_SDK_NOT_READY);
         }
@@ -174,8 +185,15 @@ public class FaceManager {
         }
 
         if (addToRuntimeLibrary) {
+            final int intId;
+            try {
+                intId = DatabaseHelper.get(context).getOrCreateFaceSdkId(empId);
+            } catch (RuntimeException e) {
+                AppLogger.e(TAG, "Face SDK ID allocation failed: empId="
+                        + safeEmpId(empId) + " error=" + e.getMessage());
+                return RegisterResult.fail(ERROR_FACE_ID_MAPPING_MISSING);
+            }
             synchronized (faceLibraryLock) {
-                int intId = toIntId(empId);
                 faceSearch.pushPersonById(intId, feature);
                 empToIntId.put(empId, intId);
                 intToEmpId.put(intId, empId);
@@ -454,15 +472,6 @@ public class FaceManager {
         return empId == null || empId.trim().isEmpty() ? "-" : empId.trim();
     }
 
-    private int toIntId(String empId) {
-        try {
-            return Integer.parseInt(empId);
-        } catch (NumberFormatException e) {
-            int hash = empId.hashCode();
-            return hash == Integer.MIN_VALUE ? Integer.MAX_VALUE : Math.abs(hash);
-        }
-    }
-
     public boolean isInitialized() {
         return initialized;
     }
@@ -473,10 +482,12 @@ public class FaceManager {
 
     private static final class FaceLibraryEntry {
         final String empId;
+        final int sdkId;
         final byte[] feature;
 
-        FaceLibraryEntry(String empId, byte[] feature) {
+        FaceLibraryEntry(String empId, int sdkId, byte[] feature) {
             this.empId = empId;
+            this.sdkId = sdkId;
             this.feature = feature;
         }
     }

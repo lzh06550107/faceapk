@@ -77,6 +77,7 @@ public class Constants {
     public static final int SYNC_INTERVAL_MINUTES = 5;
     public static final int SYNC_MAX_RETRY = 3;
     public static final int PUNCH_BATCH_SIZE = 50;
+    public static final long PUNCH_SYNC_TIME_BUDGET_MS = 30_000L;
     public static final long HEARTBEAT_INITIAL_DELAY_MS = 30_000L;
     public static final long HEARTBEAT_INTERVAL_MS = 60_000L;
 
@@ -124,5 +125,5 @@ public class Constants {
     public static final String ACTIVATION_STATUS_DISABLED = "disabled";
 
     public static final String DB_NAME = "punch.db";
-    public static final int DB_VERSION = 8;
+    public static final int DB_VERSION = 9;
 }

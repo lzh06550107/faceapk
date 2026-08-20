@@ -19,6 +19,7 @@ import com.punch.app.network.dto.HeartbeatDto;
 import com.punch.app.network.dto.PunchDto;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
+import com.punch.app.utils.PunchSnapshotHelper;
 import com.punch.app.utils.PunchTimeResolver;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.UpdateManager;
@@ -28,9 +29,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -38,6 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class SyncCoordinator {
     private static final String TAG = "SyncCoordinator";
     private static final long FACE_REGISTRATION_TIMEOUT_SECONDS = 300L;
+    private static final long SYNCED_SNAPSHOT_CLEANUP_DELAY_MS = 5000L;
     private static final String FAILURE_MSG_EMPLOYEE_SYNC_FAILED = "员工同步失败";
     private static final String FAILURE_MSG_FACE_SDK_NOT_READY = "人脸引擎未就绪";
     private static final String FAILURE_MSG_FACE_REGISTRATION_INCOMPLETE = "人脸注册未完成";
@@ -49,8 +53,12 @@ public final class SyncCoordinator {
     private static SyncCoordinator instance;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService punchSyncExecutor = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService snapshotCleanupExecutor = Executors.newSingleThreadScheduledExecutor();
     private final AtomicBoolean heartbeatQueued = new AtomicBoolean(false);
-    private final AtomicBoolean forcePunchRetryRequested = new AtomicBoolean(false);
+    private final AtomicBoolean punchSyncQueued = new AtomicBoolean(false);
+    private final AtomicReference<SyncTrigger> pendingTrigger = new AtomicReference<>();
+    private final AtomicReference<SyncTrigger> pendingPunchTrigger = new AtomicReference<>();
 
     private SyncCoordinator() {
     }
@@ -63,14 +71,12 @@ public final class SyncCoordinator {
     }
 
     public void enqueueHeartbeatCycle(Context context) {
-        enqueueHeartbeatCycle(context, false);
+        enqueueHeartbeatCycle(context, SyncTrigger.HEARTBEAT);
     }
 
-    public void enqueueHeartbeatCycle(Context context, boolean forcePunchRetry) {
+    public void enqueueHeartbeatCycle(Context context, SyncTrigger trigger) {
         Context appContext = context.getApplicationContext();
-        if (forcePunchRetry) {
-            forcePunchRetryRequested.set(true);
-        }
+        mergePendingTrigger(trigger);
         if (!heartbeatQueued.compareAndSet(false, true)) {
             AppLogger.d(TAG, "Heartbeat cycle already queued");
             return;
@@ -78,15 +84,32 @@ public final class SyncCoordinator {
         executor.execute(() -> {
             try {
                 do {
-                    runHeartbeatCycle(appContext, forcePunchRetryRequested.getAndSet(false));
-                } while (forcePunchRetryRequested.get());
+                    SyncTrigger currentTrigger = pendingTrigger.getAndSet(null);
+                    runHeartbeatCycle(appContext, currentTrigger);
+                } while (pendingTrigger.get() != null);
             } finally {
                 heartbeatQueued.set(false);
-                if (forcePunchRetryRequested.get()) {
-                    enqueueHeartbeatCycle(appContext, false);
+                SyncTrigger nextTrigger = pendingTrigger.get();
+                if (nextTrigger != null) {
+                    enqueueHeartbeatCycle(appContext, nextTrigger);
                 }
             }
         });
+    }
+
+    private void mergePendingTrigger(SyncTrigger trigger) {
+        SyncTrigger safeTrigger = trigger != null ? trigger : SyncTrigger.HEARTBEAT;
+        pendingTrigger.updateAndGet(existing -> mergeTriggers(existing, safeTrigger));
+    }
+
+    private SyncTrigger mergeTriggers(SyncTrigger existing, SyncTrigger incoming) {
+        if (existing == null) {
+            return incoming;
+        }
+        if (!existing.shouldResetLimitedPunchRetries() && incoming.shouldResetLimitedPunchRetries()) {
+            return incoming;
+        }
+        return existing;
     }
 
     public boolean syncEmployeesForPreparation(Context context) {
@@ -110,7 +133,7 @@ public final class SyncCoordinator {
         return outcome.isUsable() || FaceManager.get().getLoadedFaceCount() > 0;
     }
 
-    private void runHeartbeatCycle(Context appContext, boolean forcePunchRetry) {
+    private void runHeartbeatCycle(Context appContext, SyncTrigger trigger) {
         if (!SessionManager.get().isDeviceRegistered()) {
             AppLogger.d(TAG, "Skip sync: device not registered");
             return;
@@ -120,7 +143,7 @@ public final class SyncCoordinator {
             return;
         }
 
-        syncPunches(appContext, forcePunchRetry);
+        enqueuePunchSync(appContext, trigger);
 
         ApiResult<HeartbeatDto.HeartbeatData> heartbeat = ApiService.fetchHeartbeat(appContext);
         if (!heartbeat.success || heartbeat.data == null) {
@@ -222,7 +245,31 @@ public final class SyncCoordinator {
                 : EventProcessingOutcome.failure(result.failureMessage, result.employeeResults);
     }
 
-    private void syncPunches(Context context, boolean forcePunchRetry) {
+    private void enqueuePunchSync(Context context, SyncTrigger trigger) {
+        Context appContext = context.getApplicationContext();
+        SyncTrigger safeTrigger = trigger != null ? trigger : SyncTrigger.HEARTBEAT;
+        pendingPunchTrigger.updateAndGet(existing -> mergeTriggers(existing, safeTrigger));
+        if (!punchSyncQueued.compareAndSet(false, true)) {
+            return;
+        }
+        punchSyncExecutor.execute(() -> {
+            try {
+                do {
+                    SyncTrigger currentTrigger = pendingPunchTrigger.getAndSet(null);
+                    syncPunches(appContext, currentTrigger);
+                } while (pendingPunchTrigger.get() != null);
+            } finally {
+                punchSyncQueued.set(false);
+                SyncTrigger nextTrigger = pendingPunchTrigger.get();
+                if (nextTrigger != null) {
+                    enqueuePunchSync(appContext, nextTrigger);
+                }
+            }
+        });
+    }
+
+    private void syncPunches(Context context, SyncTrigger trigger) {
+        SyncTrigger safeTrigger = trigger != null ? trigger : SyncTrigger.HEARTBEAT;
         DatabaseHelper db = DatabaseHelper.get(context);
         int repaired = db.repairPunchSyncQueue();
         if (repaired > 0) {
@@ -232,40 +279,54 @@ public final class SyncCoordinator {
                     "补建 " + repaired + " 条历史未同步打卡记录"
             );
         }
-        if (forcePunchRetry) {
-            int reset = db.resetPunchSyncRetriesForManualSync();
+        if (safeTrigger.shouldResetLimitedPunchRetries()) {
+            int reset = db.resetLimitedPunchSyncRetries();
             if (reset > 0) {
                 InteractionLogger.logBusiness(
                         InteractionLogger.GROUP_PUNCH,
                         "重置打卡同步重试次数",
-                        "手动立即同步，重试 " + reset + " 条已达上限的打卡记录"
+                        "trigger=" + safeTrigger.name()
+                                + "\nreset_count=" + reset
+                );
+            }
+        } else if (safeTrigger.shouldResetExpiredPunchRetries()) {
+            long localDayStartSeconds = PunchSyncPolicy.startOfLocalDayEpochSeconds(
+                    System.currentTimeMillis(),
+                    TimeZone.getDefault());
+            int reset = db.resetExpiredPunchSyncRetries(localDayStartSeconds);
+            if (reset > 0) {
+                InteractionLogger.logBusiness(
+                        InteractionLogger.GROUP_PUNCH,
+                        "跨日重置打卡同步重试次数",
+                        "trigger=" + safeTrigger.name()
+                                + "\nreset_count=" + reset
+                                + "\nlocal_day_start=" + localDayStartSeconds
                 );
             }
         }
-        List<SyncQueueItem> queue = db.getSyncQueue(Constants.ACTION_PUNCH_PUSH);
+        List<SyncQueueItem> queue = db.getRetryableSyncQueue(
+                Constants.ACTION_PUNCH_PUSH,
+                Constants.SYNC_MAX_RETRY,
+                Constants.PUNCH_BATCH_SIZE);
         if (queue.isEmpty()) {
             return;
         }
 
-        List<PunchRecord> unsyncedPunches = db.getUnsyncedPunchRecords();
-        Map<String, PunchRecord> punchByClientId = new HashMap<>();
-        for (PunchRecord punch : unsyncedPunches) {
-            punchByClientId.put(punch.clientRecordId, punch);
-        }
-
+        long batchStartedAt = System.nanoTime();
+        int processed = 0;
         for (SyncQueueItem item : queue) {
-            if (item.retryCount >= Constants.SYNC_MAX_RETRY) {
-                InteractionLogger.logBusinessFailure(
-                        InteractionLogger.GROUP_PUNCH,
-                        "跳过打卡记录上传",
-                        "record_id=" + safeString(item.recordId)
-                                + "\nreason=重试次数已达上限"
-                                + "\nretry_count=" + item.retryCount
-                );
-                continue;
+            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - batchStartedAt);
+            if (!PunchSyncPolicy.canContinueBatch(
+                    processed,
+                    elapsedMillis,
+                    Constants.PUNCH_BATCH_SIZE,
+                    Constants.PUNCH_SYNC_TIME_BUDGET_MS)) {
+                break;
             }
+            processed++;
 
-            PunchRecord punch = punchByClientId.get(item.recordId);
+            PunchRecord punch = db.getUnsyncedPunchRecord(item.recordId);
             if (punch == null) {
                 InteractionLogger.logBusinessFailure(
                         InteractionLogger.GROUP_PUNCH,
@@ -286,6 +347,7 @@ public final class SyncCoordinator {
             if (result.success) {
                 db.markPunchSynced(punch.id);
                 db.removeSyncQueueItem(item.id);
+                cleanupSyncedSnapshotLater(punch.snapImagePath);
                 AppLogger.i(TAG, "Punch synced: " + punch.clientRecordId);
                 InteractionLogger.logBusiness(
                         InteractionLogger.GROUP_PUNCH,
@@ -308,8 +370,23 @@ public final class SyncCoordinator {
                                 "code=" + result.code + "\nreason=" + safeString(result.message)
                         )
                 );
+                if (PunchSyncPolicy.shouldStopAfterFailure(result.code)) {
+                    AppLogger.w(TAG, "Stop punch batch after transport failure");
+                    break;
+                }
             }
         }
+    }
+
+    private void cleanupSyncedSnapshotLater(String snapshotPath) {
+        if (isBlank(snapshotPath)) {
+            return;
+        }
+        snapshotCleanupExecutor.schedule(
+                () -> PunchSnapshotHelper.deleteSnapshot(snapshotPath),
+                SYNCED_SNAPSHOT_CLEANUP_DELAY_MS,
+                TimeUnit.MILLISECONDS
+        );
     }
 
     private String buildPunchSyncLogDetail(PunchRecord punch, int retryCount, String extra) {

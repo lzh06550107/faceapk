@@ -27,6 +27,7 @@ import com.punch.app.model.PunchRecord;
 import com.punch.app.network.ApiResult;
 import com.punch.app.network.ApiService;
 import com.punch.app.network.dto.PunchDto;
+import com.punch.app.utils.LifecycleRequestGate;
 import com.punch.app.utils.SessionManager;
 
 import java.text.SimpleDateFormat;
@@ -37,10 +38,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class RecordsFragment extends Fragment {
     private static final int PAGE_SIZE = 20;
-    private static final long MIN_AUTO_REFRESH_INTERVAL_MS = 5_000L;
     private static final String FREE_PUNCH_OPTION_LABEL = "\u81ea\u7531\u6253\u5361";
     private static final String PUNCH_TYPE_FREE = "free";
     private static final String UNSCHEDULED_PUNCH_OPTION_LABEL = "\u672a\u914d\u7f6e\u73ed\u6b21";
@@ -69,17 +70,23 @@ public class RecordsFragment extends Fragment {
     private final List<StatusOption> statusOptions = new ArrayList<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final LifecycleRequestGate viewGate = new LifecycleRequestGate();
+    private final StatisticsRequestCoordinator requestCoordinator =
+            new StatisticsRequestCoordinator();
+    private Future<?> currentLoadTask;
+    private int viewToken;
 
     private boolean suppressSelectionCallback;
     private boolean loading;
     private boolean onlineMode;
     private boolean preferOnlineMode;
+    private boolean panelSelected;
+    private boolean controlsInitialized;
     private boolean hasMore;
     private int currentPage;
     private PunchOption selectedPunchOption;
     private StatusOption selectedStatusOption;
     private String selectedDate;
-    private long lastAutoRefreshAt;
 
     @Nullable
     @Override
@@ -92,6 +99,8 @@ public class RecordsFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
+        viewToken = viewGate.open();
+        controlsInitialized = false;
 
         toggleMode = view.findViewById(R.id.toggle_mode);
         tvDate = view.findViewById(R.id.tv_date);
@@ -120,9 +129,12 @@ public class RecordsFragment extends Fragment {
         preferOnlineMode = SessionManager.get().isTokenValid();
         toggleMode.setChecked(preferOnlineMode);
         toggleMode.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (preferOnlineMode == isChecked) {
+                return;
+            }
             preferOnlineMode = isChecked;
             rebuildPunchOptions();
-            refresh();
+            requestRefresh(StatisticsRequestCoordinator.Reason.FILTER_CHANGED);
         });
 
         punchOptionAdapter = new ArrayAdapter<>(
@@ -137,8 +149,12 @@ public class RecordsFragment extends Fragment {
                 if (suppressSelectionCallback || position < 0 || position >= punchOptions.size()) {
                     return;
                 }
-                selectedPunchOption = punchOptions.get(position);
-                refresh();
+                PunchOption option = punchOptions.get(position);
+                if (!controlsInitialized || samePunchOption(selectedPunchOption, option)) {
+                    return;
+                }
+                selectedPunchOption = option;
+                requestRefresh(StatisticsRequestCoordinator.Reason.FILTER_CHANGED);
             }
 
             @Override
@@ -158,8 +174,12 @@ public class RecordsFragment extends Fragment {
                 if (suppressSelectionCallback || position < 0 || position >= statusOptions.size()) {
                     return;
                 }
-                selectedStatusOption = statusOptions.get(position);
-                refresh();
+                StatusOption option = statusOptions.get(position);
+                if (!controlsInitialized || sameStatusOption(selectedStatusOption, option)) {
+                    return;
+                }
+                selectedStatusOption = option;
+                requestRefresh(StatisticsRequestCoordinator.Reason.FILTER_CHANGED);
             }
 
             @Override
@@ -181,40 +201,56 @@ public class RecordsFragment extends Fragment {
                 LinearLayoutManager linear = (LinearLayoutManager) layoutManager;
                 int lastVisible = linear.findLastVisibleItemPosition();
                 if (lastVisible >= Math.max(0, onlineAdapter.getItemCount() - 4)) {
-                    loadOnlinePage(false);
+                    requestStatistics(StatisticsRequestCoordinator.Reason.NEXT_PAGE, false);
                 }
             }
         });
 
         rebuildPunchOptions();
         rebuildStatusOptions();
-        refresh();
+        controlsInitialized = true;
+        if (panelSelected) {
+            requestRefresh(StatisticsRequestCoordinator.Reason.PANEL_READY);
+        }
     }
 
     @Override
     public void onResume() {
         super.onResume();
+        controlsInitialized = false;
         rebuildPunchOptions();
-        maybeAutoRefresh();
-    }
-
-    private void maybeAutoRefresh() {
-        long now = System.currentTimeMillis();
-        if (now - lastAutoRefreshAt < MIN_AUTO_REFRESH_INTERVAL_MS) {
-            return;
-        }
-        lastAutoRefreshAt = now;
-        refresh();
+        controlsInitialized = true;
     }
 
     public void refresh() {
-        if (!isAdded() || loading) {
+        requestRefresh(StatisticsRequestCoordinator.Reason.USER_REFRESH);
+    }
+
+    public void onPanelEntered() {
+        panelSelected = true;
+        if (isAdded() && getView() != null && controlsInitialized) {
+            requestRefresh(StatisticsRequestCoordinator.Reason.PANEL_ENTER);
+        }
+    }
+
+    public void onPanelExited() {
+        panelSelected = false;
+        cancelCurrentLoad();
+        requestCoordinator.invalidate();
+        loading = false;
+    }
+
+    private void requestRefresh(StatisticsRequestCoordinator.Reason reason) {
+        if (!panelSelected || !isAdded() || getView() == null) {
             return;
         }
         if (preferOnlineMode) {
             applyMode(true);
-            loadOnlinePage(true);
+            requestStatistics(reason, true);
         } else {
+            cancelCurrentLoad();
+            requestCoordinator.invalidate();
+            loading = false;
             applyMode(false);
             loadOfflineRecords();
         }
@@ -235,10 +271,14 @@ public class RecordsFragment extends Fragment {
         new DatePickerDialog(
                 requireContext(),
                 (view, year, month, dayOfMonth) -> {
-                    selectedDate = String.format(Locale.getDefault(),
+                    String nextDate = String.format(Locale.getDefault(),
                             "%04d-%02d-%02d", year, month + 1, dayOfMonth);
+                    if (nextDate.equals(selectedDate)) {
+                        return;
+                    }
+                    selectedDate = nextDate;
                     tvDate.setText(selectedDate);
-                    refresh();
+                    requestRefresh(StatisticsRequestCoordinator.Reason.FILTER_CHANGED);
                 },
                 calendar.get(Calendar.YEAR),
                 calendar.get(Calendar.MONTH),
@@ -321,27 +361,46 @@ public class RecordsFragment extends Fragment {
         recyclerView.setAdapter(useOnline ? onlineAdapter : localAdapter);
     }
 
-    private void loadOnlinePage(boolean reset) {
+    private void requestStatistics(StatisticsRequestCoordinator.Reason reason, boolean reset) {
+        final int requestViewToken = viewToken;
         if (!isAdded() || selectedPunchOption == null || selectedPunchOption.clockIndex <= 0) {
-            uiHandler.post(() -> {
+            cancelCurrentLoad();
+            requestCoordinator.invalidate();
+            loading = false;
+            postToActiveView(requestViewToken, () -> {
                 applyMode(true);
                 applyOnlineSummary(null);
                 onlineAdapter.replace(new ArrayList<>());
             });
             return;
         }
-        if (loading) {
+        if (!reset && loading) {
             return;
         }
 
-        loading = true;
         final int requestPage = reset ? 1 : currentPage + 1;
         final String date = selectedDate;
         final String lineCode = SessionManager.get().getLineCode();
         final int clockIndex = selectedPunchOption.clockIndex;
         final Integer clockStatus = selectedStatusOption != null ? selectedStatusOption.value : null;
+        final StatisticsRequestCoordinator.QueryKey queryKey =
+                new StatisticsRequestCoordinator.QueryKey(
+                        date,
+                        lineCode,
+                        clockIndex,
+                        clockStatus,
+                        requestPage,
+                        PAGE_SIZE);
+        final StatisticsRequestCoordinator.RequestToken requestToken =
+                requestCoordinator.begin(reason, queryKey);
+        if (requestToken == null) {
+            return;
+        }
 
-        executor.execute(() -> {
+        cancelCurrentLoad();
+        loading = true;
+
+        currentLoadTask = executor.submit(() -> {
             ApiResult<PunchDto.ClockStatisticsData> result = ApiService.fetchClockStatistics(
                     date,
                     lineCode,
@@ -350,7 +409,12 @@ public class RecordsFragment extends Fragment {
                     requestPage,
                     PAGE_SIZE
             );
-            uiHandler.post(() -> {
+            postToActiveView(requestViewToken, () -> {
+                if (!requestCoordinator.isCurrent(requestToken)) {
+                    return;
+                }
+                requestCoordinator.complete(requestToken);
+                currentLoadTask = null;
                 loading = false;
                 applyMode(true);
                 if (!result.success || result.data == null) {
@@ -377,6 +441,7 @@ public class RecordsFragment extends Fragment {
     }
 
     private void loadOfflineRecords() {
+        final int requestViewToken = viewToken;
         final String date = selectedDate;
         final String lineCode = SessionManager.get().getLineCode();
         final PunchOption punchOption = selectedPunchOption;
@@ -406,7 +471,7 @@ public class RecordsFragment extends Fragment {
 
         final int finalSyncedCount = syncedCount;
         final int finalPendingCount = pendingCount;
-        uiHandler.post(() -> {
+        postToActiveView(requestViewToken, () -> {
             applyMode(false);
             tvTotalLabel.setText("\u672c\u5730\u8bb0\u5f55");
             tvClockedLabel.setText("\u5df2\u540c\u6b65");
@@ -441,10 +506,84 @@ public class RecordsFragment extends Fragment {
         return new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
     }
 
+    private boolean samePunchOption(@Nullable PunchOption first,
+                                    @Nullable PunchOption second) {
+        if (first == second) {
+            return true;
+        }
+        return first != null
+                && second != null
+                && first.clockIndex == second.clockIndex
+                && first.freePunch == second.freePunch
+                && first.label.equals(second.label);
+    }
+
+    private boolean sameStatusOption(@Nullable StatusOption first,
+                                     @Nullable StatusOption second) {
+        if (first == second) {
+            return true;
+        }
+        if (first == null || second == null) {
+            return false;
+        }
+        return first.value == null
+                ? second.value == null
+                : first.value.equals(second.value);
+    }
+
+    private void postToActiveView(int token, Runnable action) {
+        uiHandler.post(() -> {
+            if (viewGate.isActive(token) && isAdded() && getView() != null) {
+                action.run();
+            }
+        });
+    }
+
+    private void cancelCurrentLoad() {
+        Future<?> task = currentLoadTask;
+        currentLoadTask = null;
+        if (task != null) {
+            task.cancel(true);
+        }
+    }
+
     @Override
     public void onDestroyView() {
+        viewGate.close();
+        cancelCurrentLoad();
+        requestCoordinator.invalidate();
+        uiHandler.removeCallbacksAndMessages(null);
+        loading = false;
+        controlsInitialized = false;
+        if (recyclerView != null) {
+            recyclerView.setAdapter(null);
+        }
+        toggleMode = null;
+        tvDate = null;
+        tvTotalCount = null;
+        tvTotalLabel = null;
+        tvClockedCount = null;
+        tvClockedLabel = null;
+        tvUnclockedCount = null;
+        tvUnclockedLabel = null;
+        tvSpecialCount = null;
+        tvSpecialLabel = null;
+        viewSpecialGap = null;
+        layoutSpecialCard = null;
+        spinnerPunchIndex = null;
+        spinnerStatus = null;
+        recyclerView = null;
+        localAdapter = null;
+        onlineAdapter = null;
+        punchOptionAdapter = null;
+        statusAdapter = null;
         super.onDestroyView();
-        recyclerView.setAdapter(null);
+    }
+
+    @Override
+    public void onDestroy() {
+        executor.shutdownNow();
+        super.onDestroy();
     }
 
     private static final class PunchOption {

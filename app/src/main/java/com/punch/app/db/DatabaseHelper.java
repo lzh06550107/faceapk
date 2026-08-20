@@ -22,6 +22,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
     private static DatabaseHelper instance;
     private final Context appContext;
+    private final FaceSdkIdRegistry faceSdkIdRegistry;
 
 
     public static synchronized DatabaseHelper get(Context ctx) {
@@ -33,6 +34,22 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     private DatabaseHelper(Context context) {
         super(context, Constants.DB_NAME, null, Constants.DB_VERSION);
         this.appContext = context.getApplicationContext();
+        this.faceSdkIdRegistry = new FaceSdkIdRegistry(new FaceSdkIdRegistry.Store() {
+            @Override
+            public Integer find(String employeeId) {
+                return findFaceSdkId(employeeId);
+            }
+
+            @Override
+            public int maxId() {
+                return findMaxFaceSdkId();
+            }
+
+            @Override
+            public boolean insert(String employeeId, int sdkId) {
+                return insertFaceSdkId(employeeId, sdkId);
+            }
+        });
     }
 
 
@@ -61,6 +78,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
         // 常用索引：优化按线体、打卡日期、同步状态等场景的查询性能。
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_emp_line ON employees(assigned_line_code)");
+        createFaceSdkIdsTable(db);
         createPunchRecordIndexes(db);
     }
 
@@ -87,6 +105,47 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         if (oldVersion < 8) {
             migratePunchRecordsAddSnapshotColumns(db);
         }
+        if (oldVersion < 9) {
+            createFaceSdkIdsTable(db);
+        }
+    }
+
+    public int getOrCreateFaceSdkId(String employeeId) {
+        return faceSdkIdRegistry.getOrCreate(employeeId);
+    }
+
+    private Integer findFaceSdkId(String employeeId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT sdk_id FROM face_sdk_ids WHERE emp_id=?",
+                new String[]{employeeId});
+        try {
+            return c.moveToFirst() ? c.getInt(0) : null;
+        } finally {
+            c.close();
+        }
+    }
+
+    private int findMaxFaceSdkId() {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COALESCE(MAX(sdk_id), 0) FROM face_sdk_ids", null);
+        try {
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        } finally {
+            c.close();
+        }
+    }
+
+    private boolean insertFaceSdkId(String employeeId, int sdkId) {
+        ContentValues values = new ContentValues();
+        values.put("emp_id", employeeId);
+        values.put("sdk_id", sdkId);
+        return getWritableDatabase().insertWithOnConflict(
+                "face_sdk_ids", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1;
+    }
+
+    private void createFaceSdkIdsTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS face_sdk_ids (" +
+                "emp_id TEXT PRIMARY KEY, sdk_id INTEGER NOT NULL UNIQUE CHECK(sdk_id > 0))");
     }
 
 
@@ -321,6 +380,17 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return list;
     }
 
+    public PunchRecord getUnsyncedPunchRecord(String clientRecordId) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT * FROM punch_records WHERE client_record_id=? AND is_synced=0",
+                new String[]{clientRecordId});
+        try {
+            return c.moveToFirst() ? mapPunch(c) : null;
+        } finally {
+            c.close();
+        }
+    }
+
 
     public void markPunchSynced(String id) {
         ContentValues v = new ContentValues();
@@ -365,11 +435,40 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
 
     public List<SyncQueueItem> getSyncQueue(String action) {
+        return querySyncQueue(action, null, 0);
+    }
+
+    public List<SyncQueueItem> getRetryableSyncQueue(String action, int maxRetries, int limit) {
+        return querySyncQueue(action, maxRetries, limit);
+    }
+
+    private List<SyncQueueItem> querySyncQueue(String action,
+                                               Integer maxRetries,
+                                               int limit) {
         List<SyncQueueItem> list = new ArrayList<>();
-        String where = action != null ? " WHERE action=?" : "";
+        List<String> args = new ArrayList<>();
+        StringBuilder sql = new StringBuilder("SELECT * FROM sync_queue");
+        if (action != null || maxRetries != null) {
+            sql.append(" WHERE ");
+            if (action != null) {
+                sql.append("action=?");
+                args.add(action);
+            }
+            if (maxRetries != null) {
+                if (action != null) {
+                    sql.append(" AND ");
+                }
+                sql.append("retry_count<?");
+                args.add(String.valueOf(maxRetries));
+            }
+        }
+        sql.append(" ORDER BY created_at ASC, id ASC");
+        if (limit > 0) {
+            sql.append(" LIMIT ?");
+            args.add(String.valueOf(limit));
+        }
         Cursor c = getReadableDatabase().rawQuery(
-                "SELECT * FROM sync_queue" + where + " ORDER BY created_at ASC",
-                action != null ? new String[]{action} : null);
+                sql.toString(), args.isEmpty() ? null : args.toArray(new String[0]));
         try {
             while (c.moveToNext()) {
                 SyncQueueItem item = new SyncQueueItem();
@@ -412,7 +511,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     }
 
 
-    public int resetPunchSyncRetriesForManualSync() {
+    public int resetLimitedPunchSyncRetries() {
         int resetCount = countLimitedPunchSyncQueueItems();
         if (resetCount <= 0) {
             return 0;
@@ -424,6 +523,27 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                         "WHERE p.client_record_id=sync_queue.record_id AND p.is_synced=0)",
                 new Object[]{Constants.ACTION_PUNCH_PUSH, Constants.SYNC_MAX_RETRY});
         return resetCount;
+    }
+
+    public int resetExpiredPunchSyncRetries(long localDayStartSeconds) {
+        if (localDayStartSeconds <= 0) {
+            return 0;
+        }
+        ContentValues values = new ContentValues();
+        values.put("retry_count", 0);
+        values.putNull("last_retry");
+        return getWritableDatabase().update(
+                "sync_queue",
+                values,
+                "action=? AND retry_count>=? " +
+                        "AND (last_retry IS NULL OR last_retry<?) " +
+                        "AND EXISTS (SELECT 1 FROM punch_records p " +
+                        "WHERE p.client_record_id=sync_queue.record_id AND p.is_synced=0)",
+                new String[]{
+                        Constants.ACTION_PUNCH_PUSH,
+                        String.valueOf(Constants.SYNC_MAX_RETRY),
+                        String.valueOf(localDayStartSeconds)
+                });
     }
 
 

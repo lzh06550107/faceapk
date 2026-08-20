@@ -20,6 +20,7 @@ import com.punch.app.network.dto.AuthDto;
 import com.punch.app.network.dto.DeviceDto;
 import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.service.SyncService;
+import com.punch.app.service.SyncTrigger;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
@@ -287,7 +288,7 @@ public class LoginActivity extends AppCompatActivity {
             app.initFaceSDK();
             app.preparePunchRecognitionData();
         }
-        SyncService.triggerSync(this);
+        SyncService.triggerSync(this, SyncTrigger.APP_START);
         startActivity(new Intent(this, MainActivity.class));
         finish();
     }

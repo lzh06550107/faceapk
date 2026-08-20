@@ -42,6 +42,7 @@ import com.punch.app.network.InteractionLogger;
 import com.punch.app.network.dto.DeviceDto;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncService;
+import com.punch.app.service.SyncTrigger;
 import com.punch.app.utils.Constants;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.UpdateManager;
@@ -243,7 +244,7 @@ public class ConfigFragment extends Fragment {
         executor.execute(() -> {
             ActivationManager.get().prepareActivation(requireContext(), (ready, failureMessage) -> {
             });
-            SyncService.triggerSync(requireContext(), true);
+            SyncService.triggerSync(requireContext(), SyncTrigger.MANUAL);
             if (!isAdded()) {
                 return;
             }

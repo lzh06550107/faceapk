@@ -52,16 +52,13 @@ import com.punch.app.db.DatabaseHelper;
 import com.punch.app.face.FaceManager;
 import com.punch.app.model.Employee;
 import com.punch.app.model.PunchRecord;
-import com.punch.app.model.SyncQueueItem;
-import com.punch.app.network.ApiResult;
 import com.punch.app.network.InteractionLogger;
-import com.punch.app.network.ApiService;
-import com.punch.app.network.dto.PunchDto;
 import com.punch.app.service.SyncService;
 import com.punch.app.utils.AvatarLoader;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.Constants;
 import com.punch.app.utils.KioskManager;
+import com.punch.app.utils.LifecycleRequestGate;
 import com.punch.app.utils.PunchSnapshotHelper;
 import com.punch.app.utils.PunchTimeResolver;
 import com.punch.app.utils.SessionManager;
@@ -150,6 +147,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private final List<String> punchOptions = new ArrayList<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final LifecycleRequestGate viewGate = new LifecycleRequestGate();
+    private int viewToken;
     private final Runnable delayedCameraRelease = this::releaseCameraNow;
     private MediaPlayer feedbackPlayer;
     private TextToSpeech textToSpeech;
@@ -184,6 +183,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
+        viewToken = viewGate.open();
 
         layoutHeader = view.findViewById(R.id.layout_punch_header);
         layoutControls = view.findViewById(R.id.layout_punch_controls);
@@ -637,7 +637,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         int fallbackResId = pendingSpeechFallbackResId;
         pendingSpeechText = null;
         pendingSpeechFallbackResId = 0;
-        uiHandler.post(() -> {
+        postToActiveView(() -> {
             if (isAdded()) {
                 playRawSound(fallbackResId);
             }
@@ -986,7 +986,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         tvResult.setText(formatResultMessage(resultMessage, success));
         layoutResult.setVisibility(View.VISIBLE);
 
-        uiHandler.postDelayed(() -> {
+        postToActiveViewDelayed(() -> {
             if (cleanupAvatarPath != null && !cleanupAvatarPath.trim().isEmpty()) {
                 PunchSnapshotHelper.deleteSnapshot(cleanupAvatarPath);
             }
@@ -1000,7 +1000,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     }
 
     private void releaseRecognitionAfter(long delayMs) {
-        uiHandler.postDelayed(() -> {
+        postToActiveViewDelayed(() -> {
             recognizing = false;
             resetRecognitionAttempt();
             resetPendingMatch();
@@ -1137,8 +1137,12 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     
     private void showTransientFailureResult(String message) {
+        showTransientFailureResult(message, null);
+    }
+
+    private void showTransientFailureResult(String message, @Nullable String snapshotPath) {
         playFailFeedback(buildGenericFailureSpeech(message));
-        showResultCard(message, message, false);
+        showResultCard(message, message, false, null, snapshotPath, null, snapshotPath);
     }
 
 
@@ -1232,10 +1236,25 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 byte[] frameCopy = data.clone();
 
                 final int snapshotRotation = getSnapshotRotation(cameraId);
+                final int taskViewToken = viewToken;
+                Context context = getContext();
+                if (context == null || !viewGate.isActive(taskViewToken)) {
+                    frameProcessing = false;
+                    return;
+                }
+                final Context taskContext = context.getApplicationContext();
 
                 executor.execute(() -> {
                     try {
-                        processFrame(frameCopy, w, h, frameRotation, frameMirror, snapshotRotation);
+                        processFrame(
+                                taskContext,
+                                taskViewToken,
+                                frameCopy,
+                                w,
+                                h,
+                                frameRotation,
+                                frameMirror,
+                                snapshotRotation);
                     } finally {
                         frameProcessing = false;
                     }
@@ -1370,25 +1389,27 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
 
     
-    private void processFrame(byte[] nv21,
+    private void processFrame(Context context,
+                              int taskViewToken,
+                              byte[] nv21,
                               int width,
                               int height,
                               int angle,
                               int mirror,
                               int snapshotRotation) {
-        if (recognizing || !punchEnabled) return;
+        if (!viewGate.isActive(taskViewToken) || recognizing || !punchEnabled) return;
         if (isPreviewLayoutSettling()) return;
         PunchApplication app = PunchApplication.get();
         if (app != null && !app.isPunchRecognitionReady()) {
             app.preparePunchRecognitionData();
-            uiHandler.post(() -> setStatus(app.getPunchDataStatus()));
+            postToActiveView(taskViewToken, () -> setStatus(app.getPunchDataStatus()));
             return;
         }
         if (!FaceManager.get().isInitialized()) {
             if (app != null) {
                 app.preparePunchRecognitionData();
             }
-            uiHandler.post(() -> setStatus("\u4eba\u8138\u5f15\u64ce\u521d\u59cb\u5316\u4e2d..."));
+            postToActiveView(taskViewToken, () -> setStatus("\u4eba\u8138\u5f15\u64ce\u521d\u59cb\u5316\u4e2d..."));
             return;
         }
 
@@ -1413,12 +1434,12 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             if (now - recognitionAttemptStartedAt >= getRecognitionTimeoutMs()
                     && now - lastRecognitionTimeoutAt >= RECOGNITION_TIMEOUT_FEEDBACK_COOLDOWN_MS) {
                 lastRecognitionTimeoutAt = now;
-                uiHandler.post(() -> showTransientFailureResult("\u8bc6\u522b\u8d85\u65f6\n\u8bf7\u91cd\u8bd5"));
+                postToActiveView(taskViewToken, () -> showTransientFailureResult("\u8bc6\u522b\u8d85\u65f6\n\u8bf7\u91cd\u8bd5"));
                 return;
             }
 
             if (!FaceManager.ERROR_NO_FACE_DETECTED.equals(result.errorMsg)) {
-                uiHandler.post(() -> setStatus(result.errorMsg != null ? result.errorMsg : "\u6b63\u5728\u8bc6\u522b..."));
+                postToActiveView(taskViewToken, () -> setStatus(result.errorMsg != null ? result.errorMsg : "\u6b63\u5728\u8bc6\u522b..."));
             }
             return;
         }
@@ -1426,26 +1447,29 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         if (!isFaceInsideFrame(result.faceBounds, width, height, angle)) {
             resetPendingMatch();
             resetRecognitionAttempt();
-            uiHandler.post(() -> setStatus("\u8bf7\u5c06\u9762\u90e8\u5bf9\u51c6\u8bc6\u522b\u6846"));
+            postToActiveView(taskViewToken, () -> setStatus("\u8bf7\u5c06\u9762\u90e8\u5bf9\u51c6\u8bc6\u522b\u6846"));
             return;
         }
 
         resetRecognitionAttempt();
         long matchedAt = System.currentTimeMillis();
         if (!confirmStableMatch(result.empId, matchedAt)) {
-            uiHandler.post(() -> setStatus("\u6b63\u5728\u786e\u8ba4\u8eab\u4efd..."));
+            postToActiveView(taskViewToken, () -> setStatus("\u6b63\u5728\u786e\u8ba4\u8eab\u4efd..."));
             return;
         }
 
-        Employee emp = DatabaseHelper.get(requireContext()).getEmployee(result.empId);
+        if (!viewGate.isActive(taskViewToken)) {
+            return;
+        }
+        Employee emp = DatabaseHelper.get(context).getEmployee(result.empId);
         if (emp == null) {
-            uiHandler.post(() -> showEmployeeLookupFailure(result.empId));
+            postToActiveView(taskViewToken, () -> showEmployeeLookupFailure(result.empId));
             return;
         }
 
         String clientRecordId = "P" + SessionManager.get().getDeviceId() + "_" + UlidGenerator.generate();
         PunchSnapshotHelper.Snapshot snapshot = PunchSnapshotHelper.capture(
-                requireContext().getApplicationContext(),
+                context,
                 clientRecordId,
                 nv21,
                 width,
@@ -1454,7 +1478,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 mirror,
                 getNormalizedFrameCropRect(width, height, angle)
         );
-        uiHandler.post(() -> doPunch(emp, result.score, durationMs, clientRecordId, snapshot));
+        postToActiveView(taskViewToken,
+                () -> doPunch(emp, result.score, durationMs, clientRecordId, snapshot));
     }
 
     private boolean isFaceInsideFrame(@Nullable RectF faceBounds, int width, int height, int angle) {
@@ -1771,8 +1796,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     }
 
     
-    private void showForbiddenPunchDialog(Employee emp, String status) {
-        uiHandler.post(() -> {
+    private void showForbiddenPunchDialog(Employee emp, String status, @Nullable String snapshotPath) {
+        postToActiveView(() -> {
             String statusLabel = getStatusLabel(status);
             String statusMessage = buildEmployeeStatusMessage(emp.name, emp.id, "\u7981\u6b62\u6253\u5361", statusLabel);
             playForbiddenFeedback(buildForbiddenSpeech(emp.name, emp.id, statusLabel));
@@ -1781,9 +1806,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                     buildEmployeeResultMessage(emp.name, emp.id, "\u7981\u6b62\u6253\u5361", statusLabel),
                     false,
                     getEmployeeDisplayName(emp.name, emp.id),
-                    null,
+                    snapshotPath,
                     emp.faceImageUrl,
-                    null
+                    snapshotPath
             );
         });
     }
@@ -1815,10 +1840,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
 
         if (isForbiddenStatus(status)) {
-            showForbiddenPunchDialog(emp, status);
-            if (snapshot != null) {
-                uiHandler.postDelayed(() -> PunchSnapshotHelper.deleteSnapshot(snapshot.path), RESULT_DISPLAY_MS);
-            }
+            showForbiddenPunchDialog(emp, status, snapshot != null ? snapshot.path : null);
             return;
         }
 
@@ -1902,7 +1924,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         boolean inserted = DatabaseHelper.get(requireContext()).insertPunchRecord(record);
         if (!inserted) {
             Employee employee = DatabaseHelper.get(requireContext()).getEmployee(record.empId);
-            uiHandler.post(() -> {
+            postToActiveView(() -> {
                 String statusMessage = buildEmployeeStatusMessage(
                         record.empName,
                         record.empId,
@@ -1924,79 +1946,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
         DatabaseHelper.get(requireContext()).enqueueSyncItem(
                 record.clientRecordId, Constants.ACTION_PUNCH_PUSH);
-
-        final boolean fastPunch = isFastPunchModeEnabled();
-        if (fastPunch) {
-            uiHandler.post(() -> showPunchResult(record, false, false));
-        }
-
-        executor.execute(() -> {
-            boolean synced = false;
-            boolean online = ApiService.isBackendAvailable();
-            if (online) {
-                InteractionLogger.logBusiness(
-                        InteractionLogger.GROUP_PUNCH,
-                        "开始实时上传打卡记录",
-                        buildPunchSyncLogDetail(record, "")
-                );
-                ApiResult<PunchDto.PunchPushData> result = ApiService.pushPunch(record);
-                if (result.success) {
-                    DatabaseHelper.get(requireContext()).markPunchSynced(record.id);
-                    DatabaseHelper.get(requireContext()).removeSyncQueueItem(
-                            getQueueId(Constants.ACTION_PUNCH_PUSH, record.clientRecordId));
-                    synced = true;
-                    InteractionLogger.logBusiness(
-                            InteractionLogger.GROUP_PUNCH,
-                            "实时打卡记录上传成功",
-                            buildPunchSyncLogDetail(
-                                    record,
-                                    "server_record_id=" + (result.data == null ? "" : safeString(result.data.recordId))
-                            )
-                    );
-                } else {
-                    InteractionLogger.logBusinessFailure(
-                            InteractionLogger.GROUP_PUNCH,
-                            "实时打卡记录上传失败",
-                            buildPunchSyncLogDetail(
-                                    record,
-                                    "code=" + result.code + "\nreason=" + safeString(result.message)
-                            )
-                    );
-                }
-            } else {
-                InteractionLogger.logBusinessFailure(
-                        InteractionLogger.GROUP_PUNCH,
-                        "实时打卡记录暂未上传",
-                        buildPunchSyncLogDetail(record, "reason=后端服务不可用")
-                );
-            }
-            final boolean finalSynced = synced;
-            if (!fastPunch) {
-                uiHandler.post(() -> showPunchResult(record, finalSynced, true));
-            }
-        });
-    }
-
-    private String buildPunchSyncLogDetail(PunchRecord record, String extra) {
-        if (record == null) {
-            return safeString(extra);
-        }
-        StringBuilder builder = new StringBuilder();
-        builder.append("record_id=").append(safeString(record.id));
-        builder.append("\nclient_record_id=").append(safeString(record.clientRecordId));
-        builder.append("\nnumbers=").append(safeString(record.empId));
-        builder.append("\nteam_binding=").append(record.teamBindingId);
-        builder.append("\nline_binding_code=").append(safeString(record.lineCode));
-        builder.append("\nsnap_time=").append(record.punchTime);
-        builder.append("\npunch_type=").append(safeString(record.punchType));
-        builder.append("\nclock_index=").append(record.clockIndex);
-        builder.append("\nmatch_score=").append(record.matchScore);
-        builder.append("\nhas_snap_image=").append(!isBlank(record.snapImagePath) && record.snapImageSize > 0);
-        builder.append("\nsnap_image_size=").append(record.snapImageSize);
-        if (!isBlank(extra)) {
-            builder.append("\n").append(extra.trim());
-        }
-        return builder.toString();
+        postToActiveView(() -> showPunchResult(record, false, true));
     }
 
     private boolean isBlank(String value) {
@@ -2019,10 +1969,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 "line_binding_code=" + safeString(lineCode)
                         + "\nteam_binding=" + teamBindingId
         );
-        showTransientFailureResult(message);
-        if (snapshot != null) {
-            uiHandler.postDelayed(() -> PunchSnapshotHelper.deleteSnapshot(snapshot.path), RESULT_DISPLAY_MS);
-        }
+        showTransientFailureResult(message, snapshot != null ? snapshot.path : null);
     }
 
     
@@ -2060,7 +2007,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                     getEmployeeDisplayName(record.empName, record.empId),
                     record.snapImagePath,
                     employee != null ? employee.faceImageUrl : null,
-                    null,
+                    synced ? record.snapImagePath : null,
                     getSuccessResultDisplayMs()
             );
         } else {
@@ -2313,15 +2260,6 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
     }
 
-
-    private int getQueueId(String action, String recordId) {
-        List<SyncQueueItem> queue = DatabaseHelper.get(requireContext()).getSyncQueue(action);
-        for (SyncQueueItem item : queue) {
-            if (recordId.equals(item.recordId)) return item.id;
-        }
-        return -1;
-    }
-
     
     @Override
     public void onResume() {
@@ -2379,17 +2317,79 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
     }
 
+    private void postToActiveView(Runnable action) {
+        postToActiveView(viewToken, action);
+    }
+
+    private void postToActiveView(int token, Runnable action) {
+        uiHandler.post(() -> {
+            if (viewGate.isActive(token) && isAdded() && getView() != null) {
+                action.run();
+            }
+        });
+    }
+
+    private void postToActiveViewDelayed(Runnable action, long delayMillis) {
+        final int token = viewToken;
+        uiHandler.postDelayed(() -> {
+            if (viewGate.isActive(token) && isAdded() && getView() != null) {
+                action.run();
+            }
+        }, delayMillis);
+    }
+
     @Override
     public void onDestroyView() {
+        viewGate.close();
+        uiHandler.removeCallbacksAndMessages(null);
+        punchActive = false;
+        punchEnabled = false;
+        recognizing = false;
+        frameProcessing = false;
         setScreenOnLocked(false);
         waitingFirstPreviewFrame = false;
         hideCameraLoading();
-        uiHandler.removeCallbacks(hideStatusPanelRunnable);
+        releaseCamera();
         if (previewFullscreen) {
             setPreviewFullscreen(false);
         }
-        super.onDestroyView();
         releaseAudioFeedback();
+        layoutHeader = null;
+        layoutControls = null;
+        layoutCameraContainer = null;
+        layoutCameraLoading = null;
+        layoutPunchStatusPanel = null;
+        textureView = null;
+        faceFrameView = null;
+        tvLine = null;
+        tvTeam = null;
+        tvStatus = null;
+        tvResult = null;
+        btnSwitchCamera = null;
+        btnSound = null;
+        btnPunchToggle = null;
+        btnFullscreen = null;
+        tvCameraLoading = null;
+        tvResultAvatarFallback = null;
+        tvResultAvatarTag = null;
+        tvPunchStatusLevel = null;
+        tvPunchStatusCurrent = null;
+        tvPunchStatusToggle = null;
+        tvPunchStatusHint = null;
+        spinnerShift = null;
+        switchSpecialTime = null;
+        layoutResult = null;
+        layoutResultAvatar = null;
+        layoutPunchStatusHistory = null;
+        ivResultAvatar = null;
+        punchOptionAdapter = null;
+        super.onDestroyView();
+    }
+
+    @Override
+    public void onDestroy() {
+        executor.shutdownNow();
+        super.onDestroy();
     }
 
     private void rebuildPunchOptions() {
