@@ -268,7 +268,6 @@ public final class UpdateManager {
             );
             log("Device Owner install succeeded",
                     "sessionId=" + sessionId + "\nversion=" + safe(version));
-            UpdateInstallStateReceiver.scheduleUpdatedAppLaunch(context, version);
             return;
         }
 
@@ -387,7 +386,6 @@ public final class UpdateManager {
                     callbackIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | mutableFlag()
             );
-            UpdateInstallStateReceiver.scheduleUpdatedAppLaunch(context, validation.versionName);
             session.commit(pendingIntent.getIntentSender());
             log("Device Owner install session committed",
                     "sessionId=" + sessionId

@@ -41,6 +41,8 @@ import com.punch.app.receiver.KioskDeviceAdminReceiver;
 import com.punch.app.utils.Constants;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.PunchTimeResolver;
+import com.punch.app.utils.ScreenTimeoutPolicy;
+import com.punch.app.utils.ScreenTimeoutPolicyManager;
 import com.punch.app.utils.SessionManager;
 
 import java.text.SimpleDateFormat;
@@ -64,6 +66,22 @@ public class AdvancedConfigFragment extends Fragment {
     private static final String[] PUNCH_SPEECH_RATE_LABELS = {"1.0x", "1.2x", "1.3x", "1.5x", "1.8x", "2.0x"};
     private static final float[] PUNCH_SPEECH_RATE_VALUES = {1.0f, 1.2f, 1.3f, 1.5f, 1.8f, 2.0f};
     private static final Integer[] TIMEOUT_OPTIONS = {3, 5, 8, 10};
+    private static final String[] SCREEN_TIMEOUT_LABELS = {
+            "\u4fdd\u6301\u5e38\u4eae",
+            "30 \u79d2",
+            "1 \u5206\u949f",
+            "2 \u5206\u949f",
+            "5 \u5206\u949f",
+            "10 \u5206\u949f"
+    };
+    private static final long[] SCREEN_TIMEOUT_VALUES_MS = {
+            ScreenTimeoutPolicy.KEEP_SCREEN_ON,
+            30_000L,
+            60_000L,
+            120_000L,
+            300_000L,
+            600_000L
+    };
     private static final int PUNCH_INTERVAL_STEP_MINUTES = 1;
     private static final int PUNCH_INTERVAL_MIN_MINUTES = 0;
     private static final int PUNCH_INTERVAL_MAX_MINUTES = 240;
@@ -94,6 +112,8 @@ public class AdvancedConfigFragment extends Fragment {
     private TextView tvLivenessThresholdValue;
     private MaterialAutoCompleteTextView dropdownDistanceMode;
     private MaterialAutoCompleteTextView dropdownRecognitionTimeout;
+    private MaterialAutoCompleteTextView dropdownScreenTimeout;
+    private TextView tvScreenTimeoutStatus;
     private MaterialAutoCompleteTextView dropdownPunchSpeechMode;
     private MaterialAutoCompleteTextView dropdownPunchSpeechRate;
     private SeekBar seekMatchThreshold;
@@ -122,6 +142,7 @@ public class AdvancedConfigFragment extends Fragment {
 
     private String selectedDistanceModeValue = DISTANCE_VALUES[1];
     private int selectedRecognitionTimeoutValue = TIMEOUT_OPTIONS[0];
+    private long selectedScreenTimeoutMs = ScreenTimeoutPolicy.DEFAULT_TIMEOUT_MS;
     private String selectedPunchSpeechModeValue = Constants.DEFAULT_PUNCH_SPEECH_MODE;
     private float selectedPunchSpeechRateValue = Constants.DEFAULT_PUNCH_SPEECH_RATE;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -164,6 +185,8 @@ public class AdvancedConfigFragment extends Fragment {
         tvLivenessThresholdValue = view.findViewById(R.id.tv_liveness_threshold_value);
         dropdownDistanceMode = view.findViewById(R.id.dropdown_distance_mode);
         dropdownRecognitionTimeout = view.findViewById(R.id.dropdown_recognition_timeout);
+        dropdownScreenTimeout = view.findViewById(R.id.dropdown_screen_timeout);
+        tvScreenTimeoutStatus = view.findViewById(R.id.tv_screen_timeout_status);
         dropdownPunchSpeechMode = view.findViewById(R.id.dropdown_punch_speech_mode);
         dropdownPunchSpeechRate = view.findViewById(R.id.dropdown_punch_speech_rate);
         seekMatchThreshold = view.findViewById(R.id.seek_match_threshold);
@@ -294,6 +317,22 @@ public class AdvancedConfigFragment extends Fragment {
             }
         });
 
+        ArrayAdapter<String> screenTimeoutAdapter = new ArrayAdapter<>(
+                requireContext(),
+                android.R.layout.simple_spinner_dropdown_item,
+                SCREEN_TIMEOUT_LABELS
+        );
+        dropdownScreenTimeout.setThreshold(0);
+        dropdownScreenTimeout.setAdapter(screenTimeoutAdapter);
+        dropdownScreenTimeout.setOnItemClickListener((parent, view, position, id) ->
+                selectedScreenTimeoutMs = SCREEN_TIMEOUT_VALUES_MS[position]);
+        dropdownScreenTimeout.setOnClickListener(v -> dropdownScreenTimeout.showDropDown());
+        dropdownScreenTimeout.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                dropdownScreenTimeout.showDropDown();
+            }
+        });
+
         ArrayAdapter<String> punchSpeechModeAdapter = new ArrayAdapter<>(
                 requireContext(),
                 android.R.layout.simple_spinner_dropdown_item,
@@ -376,6 +415,8 @@ public class AdvancedConfigFragment extends Fragment {
         switchMaskDetect.setChecked(SessionManager.get().isMaskDetectEnabled());
         selectDistanceMode(SessionManager.get().getRecognitionDistanceMode());
         selectRecognitionTimeout(SessionManager.get().getRecognitionTimeoutSeconds());
+        selectScreenTimeout(SessionManager.get().getScreenTimeoutMs());
+        updateScreenTimeoutControlState();
         etPunchIntervalMinutes.setText(String.valueOf(SessionManager.get().getPunchTimeWindowMinutes()));
         switchFastPunch.setChecked(SessionManager.get().isFastPunchEnabled());
         switchShowPunchResultCard.setChecked(SessionManager.get().shouldShowPunchResultCard());
@@ -556,6 +597,22 @@ public class AdvancedConfigFragment extends Fragment {
             etPunchIntervalMinutes.requestFocus();
             return;
         }
+        if (selectedScreenTimeoutMs != session.getScreenTimeoutMs()) {
+            ScreenTimeoutPolicyManager.ApplyResult screenTimeoutResult =
+                    ScreenTimeoutPolicyManager.applyAndSave(
+                            requireContext(),
+                            selectedScreenTimeoutMs
+                    );
+            if (!screenTimeoutResult.success) {
+                Toast.makeText(
+                        requireContext(),
+                        "\u606f\u5c4f\u65f6\u95f4\u5e94\u7528\u5931\u8d25\uff1a"
+                                + screenTimeoutResult.message,
+                        Toast.LENGTH_LONG
+                ).show();
+                return;
+            }
+        }
         boolean serverChanged = !baseUrl.equals(session.getBaseUrl()) || companyId != session.getCompanyId();
         session.saveBaseUrl(baseUrl);
         session.saveCompanyId(companyId);
@@ -607,6 +664,7 @@ public class AdvancedConfigFragment extends Fragment {
         appendSection(builder, "\u7cfb\u7edf\u4e0e\u6388\u6743");
         appendLine(builder, "Base URL", session.getBaseUrl());
         appendLine(builder, "Company ID", String.valueOf(session.getCompanyId()));
+        appendLine(builder, "\u81ea\u52a8\u606f\u5c4f", formatScreenTimeout(session.getScreenTimeoutMs()));
         appendLine(builder, "\u9996\u6b21\u914d\u7f6e\u5b8c\u6210", formatBoolean(session.isSetupCompleted()));
         appendLine(builder, "\u8bbe\u5907 ID", emptyFallback(session.getDeviceId()));
         appendLine(builder, "\u8bbe\u5907\u5df2\u6ce8\u518c", formatBoolean(session.isDeviceRegistered()));
@@ -905,7 +963,17 @@ public class AdvancedConfigFragment extends Fragment {
             clearDeviceOwnerStartedAt = System.currentTimeMillis();
             updateKioskButtonState();
             updateClearDeviceOwnerButtonState();
-            KioskManager.exitForDeviceOwnerRemoval(requireActivity());
+            if (!KioskManager.exitForDeviceOwnerRemoval(requireActivity())) {
+                clearingDeviceOwner = false;
+                updateKioskButtonState();
+                updateClearDeviceOwnerButtonState();
+                Toast.makeText(
+                        context,
+                        "\u6062\u590d\u539f\u7cfb\u7edf\u606f\u5c4f\u8bbe\u7f6e\u5931\u8d25\uff0c\u672a\u89e3\u9664 Device Owner",
+                        Toast.LENGTH_LONG
+                ).show();
+                return;
+            }
             dpm.clearDeviceOwnerApp(context.getPackageName());
             openSystemUninstallPage(appContext);
             InteractionLogger.logBusiness(
@@ -1057,6 +1125,49 @@ public class AdvancedConfigFragment extends Fragment {
         }
         selectedRecognitionTimeoutValue = selected;
         dropdownRecognitionTimeout.setText(String.valueOf(selected), false);
+    }
+
+    private void selectScreenTimeout(long timeoutMs) {
+        int selectedIndex = 0;
+        for (int i = 0; i < SCREEN_TIMEOUT_VALUES_MS.length; i++) {
+            if (SCREEN_TIMEOUT_VALUES_MS[i] == timeoutMs) {
+                selectedIndex = i;
+                break;
+            }
+        }
+        selectedScreenTimeoutMs = SCREEN_TIMEOUT_VALUES_MS[selectedIndex];
+        dropdownScreenTimeout.setText(SCREEN_TIMEOUT_LABELS[selectedIndex], false);
+    }
+
+    private void updateScreenTimeoutControlState() {
+        ScreenTimeoutPolicy.ManagementAvailability availability =
+                ScreenTimeoutPolicyManager.getAvailability(requireContext());
+        boolean available = availability == ScreenTimeoutPolicy.ManagementAvailability.AVAILABLE;
+        dropdownScreenTimeout.setEnabled(available);
+        dropdownScreenTimeout.setAlpha(available ? 1f : 0.6f);
+        if (available) {
+            tvScreenTimeoutStatus.setText(
+                    "\u7a7a\u95f2\u65f6\u7531\u7cfb\u7edf\u5012\u8ba1\u606f\u5c4f\uff0c\u6253\u5361\u5904\u7406\u671f\u95f4\u4e34\u65f6\u5e38\u4eae"
+            );
+        } else if (availability
+                == ScreenTimeoutPolicy.ManagementAvailability.NOT_DEVICE_OWNER) {
+            tvScreenTimeoutStatus.setText(
+                    "\u4ec5 Device Owner \u6a21\u5f0f\u53ef\u914d\u7f6e"
+            );
+        } else {
+            tvScreenTimeoutStatus.setText(
+                    "\u7cfb\u7edf\u606f\u5c4f\u7b56\u7565\u9700\u8981 Android 9 \u6216\u66f4\u9ad8\u7248\u672c"
+            );
+        }
+    }
+
+    private String formatScreenTimeout(long timeoutMs) {
+        for (int i = 0; i < SCREEN_TIMEOUT_VALUES_MS.length; i++) {
+            if (SCREEN_TIMEOUT_VALUES_MS[i] == timeoutMs) {
+                return SCREEN_TIMEOUT_LABELS[i];
+            }
+        }
+        return SCREEN_TIMEOUT_LABELS[0];
     }
 
     private void selectPunchSpeechMode(String mode) {

@@ -10,6 +10,8 @@ import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.WifiAutoReconnectManager;
 
 public class KioskHomeActivity extends Activity {
+    public static final String EXTRA_FORCE_FRESH_TARGET = "force_fresh_target";
+
     private static final long RECENT_APP_VISIBLE_WINDOW_MS = 3_000L;
 
     @Override
@@ -21,17 +23,19 @@ public class KioskHomeActivity extends Activity {
         WifiAutoReconnectManager.ensureSavedWifiConnection(this);
 
         PunchApplication app = PunchApplication.get();
-        if (SessionManager.get().isKioskEnabled()
+        boolean forceFreshTarget = getIntent().getBooleanExtra(
+                EXTRA_FORCE_FRESH_TARGET,
+                false
+        );
+        if (!forceFreshTarget
+                && SessionManager.get().isKioskEnabled()
                 && KioskManager.bringExistingAppTaskToFront(this, getTaskId())) {
-            if (app != null && app.wasNonHomeActivityRecentlyVisible(RECENT_APP_VISIBLE_WINDOW_MS)) {
-                finishHomeTask();
-            } else {
-                launchFreshTarget(resolveDefaultActivityClass());
-            }
+            finishHomeTask();
             return;
         }
 
-        if (SessionManager.get().isKioskEnabled()
+        if (!forceFreshTarget
+                && SessionManager.get().isKioskEnabled()
                 && app != null
                 && app.wasNonHomeActivityRecentlyVisible(RECENT_APP_VISIBLE_WINDOW_MS)) {
             launchTarget(resolveRecentActivityClass(app));
@@ -39,11 +43,11 @@ public class KioskHomeActivity extends Activity {
         }
 
         if (!isTaskRoot()) {
-            launchFreshTarget(resolveDefaultActivityClass());
+            launchFreshTarget(resolveDefaultActivityClass(), forceFreshTarget);
             return;
         }
 
-        launchFreshTarget(resolveDefaultActivityClass());
+        launchFreshTarget(resolveDefaultActivityClass(), forceFreshTarget);
     }
 
     private Class<?> resolveRecentActivityClass(PunchApplication app) {
@@ -52,7 +56,10 @@ public class KioskHomeActivity extends Activity {
     }
 
     private Class<?> resolveDefaultActivityClass() {
-        return LaunchRouteResolver.resolveAuthenticatedEntry(SessionManager.get().isTokenValid());
+        return LaunchRouteResolver.resolveNext(
+                SessionManager.get().isTokenValid(),
+                SessionManager.get().isSetupCompleted()
+        );
     }
 
     private void launchTarget(Class<?> activityClass) {
@@ -67,13 +74,15 @@ public class KioskHomeActivity extends Activity {
         overridePendingTransition(0, 0);
     }
 
-    private void launchFreshTarget(Class<?> activityClass) {
+    private void launchFreshTarget(Class<?> activityClass, boolean preserveExistingTask) {
         Intent intent = new Intent(this, activityClass);
         intent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
                         | Intent.FLAG_ACTIVITY_SINGLE_TOP
         );
+        if (!preserveExistingTask) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        }
         startActivity(intent);
         finishHomeTask();
         overridePendingTransition(0, 0);

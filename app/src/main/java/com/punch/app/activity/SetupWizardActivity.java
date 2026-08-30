@@ -16,6 +16,7 @@ import android.widget.ViewFlipper;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.punch.app.R;
+import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.WifiConfigDialogHelper;
@@ -84,9 +85,11 @@ public class SetupWizardActivity extends AppCompatActivity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (!hasFocus) {
-            KioskManager.restoreAppTaskSoon(this);
+        if (hasFocus) {
+            UpdateInstallStateReceiver.acknowledgeUpdatedAppLaunch(this);
+            return;
         }
+        KioskManager.restoreAppTaskSoon(this);
     }
 
     @Override

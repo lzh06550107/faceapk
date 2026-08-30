@@ -80,6 +80,31 @@ public class SessionManagerTest {
     }
 
     @Test
+    public void screenTimeout_shouldDefaultToKeepOnAndRoundTrip() {
+        assertEquals(ScreenTimeoutPolicy.KEEP_SCREEN_ON,
+                SessionManager.get().getScreenTimeoutMs());
+
+        assertTrue(SessionManager.get().saveScreenTimeoutMs(120_000L));
+
+        assertEquals(120_000L, SessionManager.get().getScreenTimeoutMs());
+    }
+
+    @Test
+    public void originalScreenSettings_shouldPersistUntilRestored() {
+        assertFalse(SessionManager.get().hasOriginalScreenSettings());
+
+        assertTrue(SessionManager.get().saveOriginalScreenSettings(60_000L, 3));
+
+        assertTrue(SessionManager.get().hasOriginalScreenSettings());
+        assertEquals(60_000L, SessionManager.get().getOriginalScreenTimeoutMs());
+        assertEquals(3, SessionManager.get().getOriginalStayOnWhilePluggedIn());
+
+        assertTrue(SessionManager.get().clearOriginalScreenSettings());
+
+        assertFalse(SessionManager.get().hasOriginalScreenSettings());
+    }
+
+    @Test
     public void advancedSettingsPassword_shouldDefaultAndRoundTrip() {
         assertEquals(Constants.ADVANCED_SETTINGS_PASSWORD, SessionManager.get().getAdvancedSettingsPassword());
 
@@ -122,6 +147,57 @@ public class SessionManagerTest {
         assertEquals("", SessionManager.get().getUpdateCurrentVersion());
         assertEquals("", SessionManager.get().getUpdateTargetVersion());
         assertEquals("", SessionManager.get().getUpdateVersionName());
+    }
+
+    @Test
+    public void beginUpdateRelaunch_shouldResetPreviousGeneration() {
+        SessionManager.get().beginUpdateRelaunch(111L, 1_000L);
+        SessionManager.get().markUpdateRelaunchLaunching(2, 2_000L);
+        SessionManager.get().acknowledgeUpdateRelaunch();
+
+        SessionManager.get().beginUpdateRelaunch(112L, 5_000L);
+
+        assertEquals(112L, SessionManager.get().getUpdateRelaunchVersionCode());
+        assertEquals(Constants.UPDATE_RELAUNCH_PHASE_WAITING,
+                SessionManager.get().getUpdateRelaunchPhase());
+        assertEquals(0, SessionManager.get().getUpdateRelaunchAttempt());
+        assertEquals(5_000L, SessionManager.get().getUpdateRelaunchStartedElapsed());
+        assertEquals(0L, SessionManager.get().getUpdateRelaunchLastLaunchElapsed());
+    }
+
+    @Test
+    public void updateRelaunchTransitions_shouldPersistLaunchAckAndExhaustion() {
+        SessionManager.get().beginUpdateRelaunch(112L, 1_000L);
+
+        SessionManager.get().markUpdateRelaunchLaunching(1, 2_000L);
+
+        assertEquals(Constants.UPDATE_RELAUNCH_PHASE_LAUNCHING,
+                SessionManager.get().getUpdateRelaunchPhase());
+        assertEquals(1, SessionManager.get().getUpdateRelaunchAttempt());
+        assertEquals(2_000L, SessionManager.get().getUpdateRelaunchLastLaunchElapsed());
+
+        SessionManager.get().acknowledgeUpdateRelaunch();
+        assertEquals(Constants.UPDATE_RELAUNCH_PHASE_UI_ACKED,
+                SessionManager.get().getUpdateRelaunchPhase());
+
+        SessionManager.get().beginUpdateRelaunch(113L, 3_000L);
+        SessionManager.get().exhaustUpdateRelaunch();
+        assertEquals(Constants.UPDATE_RELAUNCH_PHASE_EXHAUSTED,
+                SessionManager.get().getUpdateRelaunchPhase());
+    }
+
+    @Test
+    public void clearUpdateInstallState_shouldRemoveRelaunchGeneration() {
+        SessionManager.get().beginUpdateRelaunch(112L, 1_000L);
+
+        SessionManager.get().clearUpdateInstallState();
+
+        assertEquals(0L, SessionManager.get().getUpdateRelaunchVersionCode());
+        assertEquals(Constants.UPDATE_RELAUNCH_PHASE_IDLE,
+                SessionManager.get().getUpdateRelaunchPhase());
+        assertEquals(0, SessionManager.get().getUpdateRelaunchAttempt());
+        assertEquals(0L, SessionManager.get().getUpdateRelaunchStartedElapsed());
+        assertEquals(0L, SessionManager.get().getUpdateRelaunchLastLaunchElapsed());
     }
 
     @Test

@@ -32,7 +32,6 @@ import java.util.List;
 
 public class LoginActivity extends AppCompatActivity {
     private static final String TAG = "LoginActivity";
-    private static final long UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS = 1_500L;
     private static final String DEFAULT_ACCOUNT = "admin";
     private static final String DEFAULT_PASSWORD = "a123456!";
 
@@ -72,27 +71,11 @@ public class LoginActivity extends AppCompatActivity {
         super.onResume();
         KioskManager.enterIfPossible(this);
         refreshDeviceIdFromPreferredSource();
-        scheduleStableUpdateAutoLaunchCancel();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-    }
-
-    private void scheduleStableUpdateAutoLaunchCancel() {
-        btnLogin.postDelayed(() -> {
-            if (isFinishing()) {
-                return;
-            }
-            if (isDestroyed()) {
-                return;
-            }
-            if (!KioskManager.isInLockedTaskMode(this)) {
-                return;
-            }
-            UpdateInstallStateReceiver.cancelScheduledAutoLaunch(this);
-        }, UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS);
     }
 
     @Override
@@ -106,9 +89,11 @@ public class LoginActivity extends AppCompatActivity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (!hasFocus) {
-            KioskManager.restoreAppTaskSoon(this);
+        if (hasFocus) {
+            UpdateInstallStateReceiver.acknowledgeUpdatedAppLaunch(this);
+            return;
         }
+        KioskManager.restoreAppTaskSoon(this);
     }
 
     @Override

@@ -82,25 +82,33 @@ public final class KioskManager {
         exitAndDisableInternal(activity, false);
     }
 
-    public static void exitForDeviceOwnerRemoval(Activity activity) {
-        exitAndDisableInternal(activity, true);
+    public static boolean exitForDeviceOwnerRemoval(Activity activity) {
+        return exitAndDisableInternal(activity, true);
     }
 
-    private static void exitAndDisableInternal(Activity activity, boolean allowDeviceOwnerExit) {
+    private static boolean exitAndDisableInternal(Activity activity, boolean allowDeviceOwnerExit) {
         if (activity == null) {
-            return;
+            return false;
         }
         if (isDeviceOwner(activity) && !allowDeviceOwnerExit) {
             SessionManager.get().saveKioskEnabled(true);
             AppLogger.w(TAG, "Device owner cannot exit kiosk without owner removal");
             enterIfPossible(activity);
-            return;
+            return false;
+        }
+        if (allowDeviceOwnerExit && isDeviceOwner(activity)) {
+            ScreenTimeoutPolicyManager.ApplyResult restoreResult =
+                    ScreenTimeoutPolicyManager.restoreOriginalSettings(activity);
+            if (!restoreResult.success) {
+                AppLogger.w(TAG, "Failed to restore screen settings: " + restoreResult.message);
+                return false;
+            }
         }
         SessionManager.get().saveKioskEnabled(false);
         clearOwnerPolicies(activity);
         if (getLockTaskModeState(activity) == ActivityManager.LOCK_TASK_MODE_NONE) {
             AppLogger.i(TAG, "Lock task already inactive");
-            return;
+            return true;
         }
         try {
             activity.stopLockTask();
@@ -108,6 +116,7 @@ public final class KioskManager {
         } catch (Exception e) {
             AppLogger.e(TAG, "Failed to exit lock task mode", e);
         }
+        return true;
     }
 
     public static void enableAndEnter(Activity activity) {
@@ -196,6 +205,7 @@ public final class KioskManager {
             dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET);
             dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_USER);
             dpm.addUserRestriction(admin, UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA);
+            ScreenTimeoutPolicyManager.applyConfiguredPolicy(context);
             IntentFilter homeFilter = new IntentFilter(Intent.ACTION_MAIN);
             homeFilter.addCategory(Intent.CATEGORY_HOME);
             homeFilter.addCategory(Intent.CATEGORY_DEFAULT);

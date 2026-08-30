@@ -1,6 +1,7 @@
 package com.punch.app.fragment;
 
 import android.Manifest;
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -61,6 +62,7 @@ import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.LifecycleRequestGate;
 import com.punch.app.utils.PunchSnapshotHelper;
 import com.punch.app.utils.PunchTimeResolver;
+import com.punch.app.utils.ScreenTimeoutPolicy;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.UlidGenerator;
 import com.punch.app.widget.FaceFrameView;
@@ -122,7 +124,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private boolean punchEnabled = false;
     private boolean specialTimeEnabled = false;
     private boolean previewFullscreen = false;
-    private boolean recognizing = false;
+    private volatile boolean recognizing = false;
+    private volatile boolean faceInteractionActive = false;
     private long recognitionAttemptStartedAt = 0;
     private long lastRecognitionTimeoutAt = 0;
     private long lastLivenessDebugLogAt = 0;
@@ -135,6 +138,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private static final int STABLE_MATCH_REQUIRED_FRAMES = 2;
     private static final long STABLE_MATCH_MAX_GAP_MS = 1500;
     private static final long CAMERA_RELEASE_DELAY_MS = 1800;
+    private static final long FACE_INTERACTION_GRACE_MS = 2000;
     private static final long STATUS_PANEL_AUTO_HIDE_DELAY_MS = 3500;
     private static final long STATUS_PANEL_FADE_DURATION_MS = 500;
     private static final long PREVIEW_LAYOUT_SETTLE_MS = 300;
@@ -147,6 +151,10 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private final List<String> punchOptions = new ArrayList<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable clearFaceInteractionRunnable = () -> {
+        faceInteractionActive = false;
+        updateScreenAwakeState();
+    };
     private final LifecycleRequestGate viewGate = new LifecycleRequestGate();
     private int viewToken;
     private final Runnable delayedCameraRelease = this::releaseCameraNow;
@@ -372,7 +380,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     private void setPunchEnabled(boolean enabled) {
         punchEnabled = enabled;
         if (!enabled) {
-            recognizing = false;
+            clearFaceInteraction();
+            setRecognizing(false);
             resetRecognitionAttempt();
             resetPendingMatch();
             if (layoutResult != null) {
@@ -381,6 +390,49 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         }
         updatePunchToggleLabel();
         updateIdleStatus();
+        updateScreenAwakeState();
+    }
+
+    private void setRecognizing(boolean value) {
+        recognizing = value;
+        updateScreenAwakeState();
+    }
+
+    private void noteFaceInteraction() {
+        faceInteractionActive = true;
+        uiHandler.removeCallbacks(clearFaceInteractionRunnable);
+        uiHandler.postDelayed(clearFaceInteractionRunnable, FACE_INTERACTION_GRACE_MS);
+        updateScreenAwakeState();
+    }
+
+    private void clearFaceInteraction() {
+        faceInteractionActive = false;
+        uiHandler.removeCallbacks(clearFaceInteractionRunnable);
+        updateScreenAwakeState();
+    }
+
+    private void updateScreenAwakeState() {
+        Activity activity = getActivity();
+        if (activity == null) {
+            return;
+        }
+        Runnable updateFlag = () -> {
+            if (getActivity() != activity) {
+                return;
+            }
+            boolean screenActive = punchActive && isResumed() && !isHidden();
+            boolean keepScreenOn = ScreenTimeoutPolicy.shouldKeepScreenOn(
+                    SessionManager.get().getScreenTimeoutMs(),
+                    recognizing || faceInteractionActive,
+                    screenActive
+            );
+            applyScreenOnFlag(activity, keepScreenOn);
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            updateFlag.run();
+        } else {
+            activity.runOnUiThread(updateFlag);
+        }
     }
 
     private void updatePunchToggleLabel() {
@@ -979,7 +1031,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                                 @Nullable String fallbackAvatarSource,
                                 @Nullable String cleanupAvatarPath,
                                 long displayMs) {
-        recognizing = true;
+        setRecognizing(true);
         setStatus(statusMessage);
         applyResultCardStyle(success);
         bindResultAvatar(displayName, primaryAvatarSource, fallbackAvatarSource);
@@ -992,7 +1044,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             }
             clearResultAvatar();
             layoutResult.setVisibility(View.GONE);
-            recognizing = false;
+            setRecognizing(false);
             resetRecognitionAttempt();
             resetPendingMatch();
             updateIdleStatus();
@@ -1001,7 +1053,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     private void releaseRecognitionAfter(long delayMs) {
         postToActiveViewDelayed(() -> {
-            recognizing = false;
+            setRecognizing(false);
             resetRecognitionAttempt();
             resetPendingMatch();
             updateIdleStatus();
@@ -1378,7 +1430,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         } else {
             punchActive = true;
             setPunchEnabled(false);
-            setScreenOnLocked(true);
+            updateScreenAwakeState();
             if (tvLine != null) {
                 refreshBindingHeader();
             }
@@ -1417,6 +1469,12 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         FaceManager.RecognizeResult result =
                 FaceManager.get().recognizeFromNv21(nv21, width, height, angle, mirror);
         long durationMs = System.currentTimeMillis() - startedAt;
+        if (!viewGate.isActive(taskViewToken)) {
+            return;
+        }
+        if (!FaceManager.ERROR_NO_FACE_DETECTED.equals(result.errorMsg)) {
+            postToActiveView(taskViewToken, this::noteFaceInteraction);
+        }
 
         if (!result.matched) {
             resetPendingMatch();
@@ -1669,7 +1727,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         resetRecognitionAttempt();
         resetPendingMatch();
         if (!isAdded()) {
-            recognizing = false;
+            setRecognizing(false);
             return;
         }
         setStatus("\u5f53\u524d\u6253\u5361\u4e0d\u5728\u6253\u5361\u65f6\u95f4\u8303\u56f4");
@@ -1681,7 +1739,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 .setMessage("\u5f53\u524d\u6253\u5361\u4e0d\u5728\u6253\u5361\u65f6\u95f4\u8303\u56f4")
                 .setPositiveButton("\u786e\u5b9a", null)
                 .setOnDismissListener(dialog -> {
-                    recognizing = false;
+                    setRecognizing(false);
                     if (autoSelected[0]) {
                         setStatus("\u5df2\u81ea\u52a8\u9009\u62e9\uff1a" + getPunchOptionLabel(selectedIndex[0]));
                     } else {
@@ -1727,7 +1785,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         resetRecognitionAttempt();
         resetPendingMatch();
         if (!isAdded()) {
-            recognizing = false;
+            setRecognizing(false);
             return;
         }
         setStatus("\u5f53\u524d\u65f6\u95f4\u547d\u4e2d\u591a\u4e2a\u6253\u5361\u9879\uff0c\u8bf7\u624b\u52a8\u9009\u62e9");
@@ -1737,7 +1795,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                 .setMessage("\u5f53\u524d\u65f6\u95f4\u547d\u4e2d\u591a\u4e2a\u6253\u5361\u9879\uff0c\u8bf7\u624b\u52a8\u9009\u62e9")
                 .setPositiveButton("\u786e\u5b9a", null)
                 .setOnDismissListener(dialog -> {
-                    recognizing = false;
+                    setRecognizing(false);
                     updateIdleStatus();
                 })
                 .show();
@@ -1818,7 +1876,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
                          long durationMs,
                          String clientRecordId,
                          @Nullable PunchSnapshotHelper.Snapshot snapshot) {
-        recognizing = true;
+        setRecognizing(true);
 
         String deviceId = SessionManager.get().getDeviceId();
         String lineCode = SessionManager.get().getLineCode();
@@ -2249,10 +2307,25 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     
     private void setScreenOnLocked(boolean keepScreenOn) {
-        if (!isAdded()) {
+        Activity activity = getActivity();
+        if (activity == null) {
             return;
         }
-        Window window = requireActivity().getWindow();
+        Runnable applyFlag = () -> {
+            if (getActivity() != activity) {
+                return;
+            }
+            applyScreenOnFlag(activity, keepScreenOn);
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            applyFlag.run();
+        } else {
+            activity.runOnUiThread(applyFlag);
+        }
+    }
+
+    private void applyScreenOnFlag(Activity activity, boolean keepScreenOn) {
+        Window window = activity.getWindow();
         if (keepScreenOn) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
@@ -2266,7 +2339,7 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         super.onResume();
         punchActive = !isHidden();
         setPunchEnabled(false);
-        setScreenOnLocked(true);
+        updateScreenAwakeState();
         refreshBindingHeader();
         PunchApplication app = PunchApplication.get();
         if (app != null) {
@@ -2344,7 +2417,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
         uiHandler.removeCallbacksAndMessages(null);
         punchActive = false;
         punchEnabled = false;
-        recognizing = false;
+        clearFaceInteraction();
+        setRecognizing(false);
         frameProcessing = false;
         setScreenOnLocked(false);
         waitingFirstPreviewFrame = false;

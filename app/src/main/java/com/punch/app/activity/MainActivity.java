@@ -33,8 +33,6 @@ import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 
 public class MainActivity extends AppCompatActivity {
-    private static final long UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS = 1_500L;
-
     private TextView tvBanner;
     private BottomNavigationView bottomNav;
 
@@ -99,22 +97,6 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         KioskManager.enterIfPossible(this);
-        scheduleStableUpdateAutoLaunchCancel();
-    }
-
-    private void scheduleStableUpdateAutoLaunchCancel() {
-        bottomNav.postDelayed(() -> {
-            if (isFinishing()) {
-                return;
-            }
-            if (isDestroyed()) {
-                return;
-            }
-            if (!KioskManager.isInLockedTaskMode(this)) {
-                return;
-            }
-            UpdateInstallStateReceiver.cancelScheduledAutoLaunch(this);
-        }, UPDATE_AUTO_LAUNCH_CANCEL_DELAY_MS);
     }
 
     @Override
@@ -128,9 +110,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (!hasFocus) {
-            KioskManager.restoreAppTaskSoon(this);
+        if (hasFocus) {
+            UpdateInstallStateReceiver.acknowledgeUpdatedAppLaunch(this);
+            return;
         }
+        KioskManager.restoreAppTaskSoon(this);
     }
 
     @Override

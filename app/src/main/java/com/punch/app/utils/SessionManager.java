@@ -224,6 +224,52 @@ public class SessionManager {
         return prefs.getBoolean(Constants.KEY_KIOSK_ENABLED, true);
     }
 
+    public long getScreenTimeoutMs() {
+        long timeoutMs = prefs.getLong(
+                Constants.KEY_SCREEN_TIMEOUT_MS,
+                ScreenTimeoutPolicy.DEFAULT_TIMEOUT_MS
+        );
+        return ScreenTimeoutPolicy.isSupportedTimeoutMs(timeoutMs)
+                ? timeoutMs
+                : ScreenTimeoutPolicy.DEFAULT_TIMEOUT_MS;
+    }
+
+    public boolean saveScreenTimeoutMs(long timeoutMs) {
+        long safeTimeoutMs = ScreenTimeoutPolicy.isSupportedTimeoutMs(timeoutMs)
+                ? timeoutMs
+                : ScreenTimeoutPolicy.DEFAULT_TIMEOUT_MS;
+        return prefs.edit().putLong(Constants.KEY_SCREEN_TIMEOUT_MS, safeTimeoutMs).commit();
+    }
+
+    public boolean hasOriginalScreenSettings() {
+        return prefs.getBoolean(Constants.KEY_ORIGINAL_SCREEN_SETTINGS_CAPTURED, false);
+    }
+
+    public boolean saveOriginalScreenSettings(long timeoutMs, int stayOnWhilePluggedIn) {
+        return prefs.edit()
+                .putBoolean(Constants.KEY_ORIGINAL_SCREEN_SETTINGS_CAPTURED, true)
+                .putLong(Constants.KEY_ORIGINAL_SCREEN_TIMEOUT_MS, timeoutMs)
+                .putInt(Constants.KEY_ORIGINAL_STAY_ON_WHILE_PLUGGED_IN,
+                        stayOnWhilePluggedIn)
+                .commit();
+    }
+
+    public long getOriginalScreenTimeoutMs() {
+        return prefs.getLong(Constants.KEY_ORIGINAL_SCREEN_TIMEOUT_MS, 60_000L);
+    }
+
+    public int getOriginalStayOnWhilePluggedIn() {
+        return prefs.getInt(Constants.KEY_ORIGINAL_STAY_ON_WHILE_PLUGGED_IN, 0);
+    }
+
+    public boolean clearOriginalScreenSettings() {
+        return prefs.edit()
+                .remove(Constants.KEY_ORIGINAL_SCREEN_SETTINGS_CAPTURED)
+                .remove(Constants.KEY_ORIGINAL_SCREEN_TIMEOUT_MS)
+                .remove(Constants.KEY_ORIGINAL_STAY_ON_WHILE_PLUGGED_IN)
+                .commit();
+    }
+
     public void saveAdvancedSettingsPassword(String password) {
         String safePassword = password == null ? "" : password.trim();
         if (safePassword.isEmpty()) {
@@ -523,7 +569,13 @@ public class SessionManager {
                 .putLong(Constants.KEY_UPDATE_INSTALL_STARTED_AT, System.currentTimeMillis())
                 .putBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED, false)
                 .putBoolean(Constants.KEY_UPDATE_AUTO_LAUNCH_COMPLETED, false)
-                .apply();
+                .remove(Constants.KEY_UPDATE_RELAUNCH_VERSION_CODE)
+                .putString(Constants.KEY_UPDATE_RELAUNCH_PHASE,
+                        Constants.UPDATE_RELAUNCH_PHASE_IDLE)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_ATTEMPT)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_STARTED_ELAPSED)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_LAST_LAUNCH_ELAPSED)
+                .commit();
     }
 
     public void markUpdateInstallResult(String status, String message, int resultCode) {
@@ -583,7 +635,73 @@ public class SessionManager {
                 .remove(Constants.KEY_UPDATE_INSTALL_STARTED_AT)
                 .remove(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED)
                 .remove(Constants.KEY_UPDATE_AUTO_LAUNCH_COMPLETED)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_VERSION_CODE)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_PHASE)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_ATTEMPT)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_STARTED_ELAPSED)
+                .remove(Constants.KEY_UPDATE_RELAUNCH_LAST_LAUNCH_ELAPSED)
                 .apply();
+    }
+
+    public void beginUpdateRelaunch(long versionCode, long startedElapsedRealtime) {
+        prefs.edit()
+                .putLong(Constants.KEY_UPDATE_RELAUNCH_VERSION_CODE, Math.max(0L, versionCode))
+                .putString(Constants.KEY_UPDATE_RELAUNCH_PHASE,
+                        Constants.UPDATE_RELAUNCH_PHASE_WAITING)
+                .putInt(Constants.KEY_UPDATE_RELAUNCH_ATTEMPT, 0)
+                .putLong(Constants.KEY_UPDATE_RELAUNCH_STARTED_ELAPSED,
+                        Math.max(0L, startedElapsedRealtime))
+                .putLong(Constants.KEY_UPDATE_RELAUNCH_LAST_LAUNCH_ELAPSED, 0L)
+                .remove(Constants.KEY_UPDATE_AUTO_LAUNCH_SCHEDULED)
+                .remove(Constants.KEY_UPDATE_AUTO_LAUNCH_COMPLETED)
+                .commit();
+    }
+
+    public long getUpdateRelaunchVersionCode() {
+        return prefs.getLong(Constants.KEY_UPDATE_RELAUNCH_VERSION_CODE, 0L);
+    }
+
+    public String getUpdateRelaunchPhase() {
+        return prefs.getString(
+                Constants.KEY_UPDATE_RELAUNCH_PHASE,
+                Constants.UPDATE_RELAUNCH_PHASE_IDLE
+        );
+    }
+
+    public int getUpdateRelaunchAttempt() {
+        return Math.max(0, prefs.getInt(Constants.KEY_UPDATE_RELAUNCH_ATTEMPT, 0));
+    }
+
+    public long getUpdateRelaunchStartedElapsed() {
+        return prefs.getLong(Constants.KEY_UPDATE_RELAUNCH_STARTED_ELAPSED, 0L);
+    }
+
+    public long getUpdateRelaunchLastLaunchElapsed() {
+        return prefs.getLong(Constants.KEY_UPDATE_RELAUNCH_LAST_LAUNCH_ELAPSED, 0L);
+    }
+
+    public void markUpdateRelaunchLaunching(int nextAttempt, long launchElapsedRealtime) {
+        prefs.edit()
+                .putString(Constants.KEY_UPDATE_RELAUNCH_PHASE,
+                        Constants.UPDATE_RELAUNCH_PHASE_LAUNCHING)
+                .putInt(Constants.KEY_UPDATE_RELAUNCH_ATTEMPT, Math.max(0, nextAttempt))
+                .putLong(Constants.KEY_UPDATE_RELAUNCH_LAST_LAUNCH_ELAPSED,
+                        Math.max(0L, launchElapsedRealtime))
+                .commit();
+    }
+
+    public void acknowledgeUpdateRelaunch() {
+        prefs.edit()
+                .putString(Constants.KEY_UPDATE_RELAUNCH_PHASE,
+                        Constants.UPDATE_RELAUNCH_PHASE_UI_ACKED)
+                .commit();
+    }
+
+    public void exhaustUpdateRelaunch() {
+        prefs.edit()
+                .putString(Constants.KEY_UPDATE_RELAUNCH_PHASE,
+                        Constants.UPDATE_RELAUNCH_PHASE_EXHAUSTED)
+                .commit();
     }
 
     public boolean isUpdateAutoLaunchScheduled() {

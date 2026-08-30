@@ -15,6 +15,12 @@ public class Constants {
     public static final String KEY_COMPANY_ID = "company_id";
     public static final String KEY_BASE_URL = "base_url";
     public static final String KEY_KIOSK_ENABLED = "kiosk_enabled";
+    public static final String KEY_SCREEN_TIMEOUT_MS = "screen_timeout_ms";
+    public static final String KEY_ORIGINAL_SCREEN_SETTINGS_CAPTURED =
+            "original_screen_settings_captured";
+    public static final String KEY_ORIGINAL_SCREEN_TIMEOUT_MS = "original_screen_timeout_ms";
+    public static final String KEY_ORIGINAL_STAY_ON_WHILE_PLUGGED_IN =
+            "original_stay_on_while_plugged_in";
     public static final String KEY_ACCOUNT = "account";
     public static final String KEY_LINE_CODE = "line_code";
     public static final String KEY_LINE_NAME = "line_name";
@@ -39,6 +45,17 @@ public class Constants {
     public static final String KEY_UPDATE_INSTALL_STARTED_AT = "update_install_started_at";
     public static final String KEY_UPDATE_AUTO_LAUNCH_SCHEDULED = "update_auto_launch_scheduled";
     public static final String KEY_UPDATE_AUTO_LAUNCH_COMPLETED = "update_auto_launch_completed";
+    public static final String KEY_UPDATE_RELAUNCH_VERSION_CODE = "update_relaunch_version_code";
+    public static final String KEY_UPDATE_RELAUNCH_PHASE = "update_relaunch_phase";
+    public static final String KEY_UPDATE_RELAUNCH_ATTEMPT = "update_relaunch_attempt";
+    public static final String KEY_UPDATE_RELAUNCH_STARTED_ELAPSED = "update_relaunch_started_elapsed";
+    public static final String KEY_UPDATE_RELAUNCH_LAST_LAUNCH_ELAPSED =
+            "update_relaunch_last_launch_elapsed";
+    public static final String UPDATE_RELAUNCH_PHASE_IDLE = "idle";
+    public static final String UPDATE_RELAUNCH_PHASE_WAITING = "waiting";
+    public static final String UPDATE_RELAUNCH_PHASE_LAUNCHING = "launching";
+    public static final String UPDATE_RELAUNCH_PHASE_UI_ACKED = "ui_acked";
+    public static final String UPDATE_RELAUNCH_PHASE_EXHAUSTED = "exhausted";
     public static final String KEY_EMP_DATA_VERSION = "emp_data_version";
     public static final String KEY_MATCH_THRESHOLD = "match_threshold";
     public static final String KEY_FACE_THRESHOLD = "face_threshold";
