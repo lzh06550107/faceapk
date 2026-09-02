@@ -28,7 +28,6 @@ public class WifiAutoReconnectManagerTest {
         WifiAutoReconnectManager.ensureSavedWifiConnection(deps);
 
         assertFalse(deps.wifiEnabledCalled);
-        assertEquals(0, deps.disconnectCalls);
     }
 
     @Test
@@ -56,18 +55,54 @@ public class WifiAutoReconnectManagerTest {
     }
 
     @Test
+    public void attemptSavedWifiConnection_shouldWaitForWifiToBecomeEnabled() {
+        FakeDeps deps = new FakeDeps();
+        deps.savedSsid = "Office-WiFi";
+        deps.wifiEnabled = false;
+
+        WifiAutoReconnectManager.AttemptResult result =
+                WifiAutoReconnectManager.attemptSavedWifiConnection(deps);
+
+        assertEquals(WifiAutoReconnectManager.AttemptResult.WIFI_ENABLING, result);
+        assertTrue(deps.wifiEnabledCalled);
+        assertEquals(0, deps.addOrFindNetworkCalls);
+        assertEquals(0, deps.reconnectCalls);
+    }
+
+    @Test
+    public void attemptWifiConnection_shouldUseCurrentManualCredentials() {
+        FakeDeps deps = new FakeDeps();
+        deps.savedSsid = "Old-WiFi";
+        deps.savedPassword = "old-password";
+        deps.networkIdToReturn = 18;
+
+        WifiAutoReconnectManager.AttemptResult result =
+                WifiAutoReconnectManager.attemptWifiConnection(
+                        deps,
+                        "New-WiFi",
+                        "new-password"
+                );
+
+        assertEquals(WifiAutoReconnectManager.AttemptResult.SUBMITTED, result);
+        assertEquals("New-WiFi", deps.lastSsid);
+        assertEquals("new-password", deps.lastPassword);
+        assertEquals(18, deps.lastEnabledNetworkId);
+    }
+
+    @Test
     public void ensureSavedWifiConnection_shouldReconnectWhenSavedNetworkExists() {
         FakeDeps deps = new FakeDeps();
         deps.savedSsid = "Office-WiFi";
         deps.savedPassword = "secret123";
         deps.networkIdToReturn = 42;
 
-        WifiAutoReconnectManager.ensureSavedWifiConnection(deps);
+        WifiAutoReconnectManager.AttemptResult result =
+                WifiAutoReconnectManager.attemptSavedWifiConnection(deps);
 
-        assertTrue(deps.wifiEnabledCalled);
+        assertEquals(WifiAutoReconnectManager.AttemptResult.SUBMITTED, result);
+        assertFalse(deps.wifiEnabledCalled);
         assertEquals("Office-WiFi", deps.lastSsid);
         assertEquals("secret123", deps.lastPassword);
-        assertEquals(1, deps.disconnectCalls);
         assertEquals(42, deps.lastEnabledNetworkId);
         assertEquals(1, deps.reconnectCalls);
     }
@@ -80,8 +115,7 @@ public class WifiAutoReconnectManagerTest {
 
         WifiAutoReconnectManager.ensureSavedWifiConnection(deps);
 
-        assertTrue(deps.wifiEnabledCalled);
-        assertEquals(0, deps.disconnectCalls);
+        assertFalse(deps.wifiEnabledCalled);
         assertEquals(0, deps.reconnectCalls);
     }
 
@@ -105,13 +139,14 @@ public class WifiAutoReconnectManagerTest {
         String savedPassword = "";
         boolean deviceOwner = true;
         boolean hasWifiService = true;
+        boolean wifiEnabled = true;
+        boolean setWifiEnabledResult = true;
         boolean connectedToTarget = false;
         int networkIdToReturn = 7;
         boolean enableNetworkResult = true;
 
         boolean wifiEnabledCalled;
         int addOrFindNetworkCalls;
-        int disconnectCalls;
         int reconnectCalls;
         int lastEnabledNetworkId = -1;
         String lastSsid = "";
@@ -143,13 +178,19 @@ public class WifiAutoReconnectManagerTest {
         }
 
         @Override
+        public boolean isWifiEnabled() {
+            return wifiEnabled;
+        }
+
+        @Override
         public boolean isConnectedToTargetSsid(String ssid) {
             return connectedToTarget;
         }
 
         @Override
-        public void setWifiEnabled(boolean enabled) {
+        public boolean setWifiEnabled(boolean enabled) {
             wifiEnabledCalled = enabled;
+            return setWifiEnabledResult;
         }
 
         @Override
@@ -158,11 +199,6 @@ public class WifiAutoReconnectManagerTest {
             lastSsid = ssid;
             lastPassword = password;
             return networkIdToReturn;
-        }
-
-        @Override
-        public void disconnect() {
-            disconnectCalls++;
         }
 
         @Override

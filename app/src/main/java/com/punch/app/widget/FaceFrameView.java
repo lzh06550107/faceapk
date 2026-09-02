@@ -21,6 +21,7 @@ public class FaceFrameView extends View {
     private float scanProgress = 0f;
     
     private boolean scanDown = true;
+    private boolean scanAnimationEnabled;
     
     private final Runnable animRunnable = this::tick;
 
@@ -102,6 +103,9 @@ public class FaceFrameView extends View {
 
     
     private void tick() {
+        if (!scanAnimationEnabled || !isAttachedToWindow()) {
+            return;
+        }
         float step = 0.025f;
         if (scanDown) {
             scanProgress += step;
@@ -120,10 +124,29 @@ public class FaceFrameView extends View {
         postDelayed(animRunnable, 30);
     }
 
+    public void setScanAnimationEnabled(boolean enabled) {
+        if (scanAnimationEnabled == enabled) {
+            return;
+        }
+        scanAnimationEnabled = enabled;
+        removeCallbacks(animRunnable);
+        if (enabled && isAttachedToWindow()) {
+            post(animRunnable);
+        } else {
+            invalidate();
+        }
+    }
+
+    public boolean isScanAnimationRunning() {
+        return scanAnimationEnabled && isAttachedToWindow();
+    }
+
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        post(animRunnable);
+        if (scanAnimationEnabled) {
+            post(animRunnable);
+        }
     }
 
     @Override

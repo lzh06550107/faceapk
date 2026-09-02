@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:name=".DeviceOwnerTestApplication"
+        tools:replace="android:name">
+        <receiver
+            android:name=".receiver.DeviceOwnerTestControlReceiver"
+            android:exported="true" />
+        <activity
+            android:name=".activity.DeviceOwnerTestControlActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.punch.app.device_owner_test"
+            android:theme="@style/AppTheme" />
+    </application>
+</manifest>

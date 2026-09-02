@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="camera_face_soak_auto_enable">false</bool>
+    <bool name="face_punch_stress_bypass_prechecks">true</bool>
+</resources>

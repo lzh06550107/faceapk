@@ -1,7 +1,7 @@
 package com.punch.app.utils;
 
 public class Constants {
-    public static final String DEFAULT_BASE_URL = "http://hzmq1.hainasmart.com.cn";
+    public static final String DEFAULT_BASE_URL = "http://192.168.111.240";
     public static final int DEFAULT_COMPANY_ID = 2;
 
     public static final String PREF_NAME = "punch_prefs";
@@ -106,6 +106,7 @@ public class Constants {
     public static final String STATUS_REST = "rest";
 
     public static final String ACTION_PUNCH_PUSH = "punch_push";
+    public static final String ACTION_PUNCH_STRESS_NO_UPLOAD = "stress_punch_no_upload";
 
     public static final String UPDATE_INSTALL_STATUS_NONE = "none";
     public static final String UPDATE_INSTALL_STATUS_PENDING = "pending";
@@ -115,6 +116,7 @@ public class Constants {
     public static final float DEFAULT_MATCH_THRESHOLD = 0.80f;
     public static final float DEFAULT_FACE_THRESHOLD = 0.80f;
     public static final float DEFAULT_LIVENESS_THRESHOLD = 0.80f;
+    public static final boolean DEFAULT_LIVENESS_CHECK = false;
     public static final int DEFAULT_MIN_FACE_SIZE = 80;
     public static final String DISTANCE_MODE_NEAR = "near";
     public static final String DISTANCE_MODE_STANDARD = "standard";
@@ -142,5 +144,5 @@ public class Constants {
     public static final String ACTIVATION_STATUS_DISABLED = "disabled";
 
     public static final String DB_NAME = "punch.db";
-    public static final int DB_VERSION = 9;
+    public static final int DB_VERSION = 10;
 }

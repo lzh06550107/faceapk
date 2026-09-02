@@ -13,6 +13,7 @@ import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentTransaction;
 
 import com.google.android.material.bottomnavigation.BottomNavigationView;
@@ -33,6 +34,11 @@ import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG_PUNCH = "main:punch";
+    private static final String TAG_RECORDS = "main:records";
+    private static final String TAG_CONFIG = "main:config";
+    private static final String STATE_SELECTED_NAV_ITEM = "main:selected_nav_item";
+
     private TextView tvBanner;
     private BottomNavigationView bottomNav;
 
@@ -41,7 +47,6 @@ public class MainActivity extends AppCompatActivity {
     private ConfigFragment configFragment;
     private Fragment currentFragment;
 
-    private boolean wasOffline = false;
     private boolean punchFullscreen = false;
 
     private final BroadcastReceiver networkReceiver = new BroadcastReceiver() {
@@ -49,10 +54,6 @@ public class MainActivity extends AppCompatActivity {
         public void onReceive(Context context, Intent intent) {
             boolean online = isNetworkAvailable();
             updateBanner(online);
-            if (online && wasOffline && SessionManager.get().isTokenValid()) {
-                SyncService.triggerSync(MainActivity.this, SyncTrigger.NETWORK_RESTORED);
-            }
-            wasOffline = !online;
         }
     };
 
@@ -64,11 +65,26 @@ public class MainActivity extends AppCompatActivity {
         tvBanner = findViewById(R.id.tv_banner);
         bottomNav = findViewById(R.id.bottom_nav);
 
-        punchFragment = new PunchFragment();
-        recordsFragment = new RecordsFragment();
-        configFragment = new ConfigFragment();
+        FragmentManager fragmentManager = getSupportFragmentManager();
+        punchFragment = findRestoredFragment(fragmentManager, TAG_PUNCH, PunchFragment.class);
+        recordsFragment = findRestoredFragment(fragmentManager, TAG_RECORDS, RecordsFragment.class);
+        configFragment = findRestoredFragment(fragmentManager, TAG_CONFIG, ConfigFragment.class);
+        if (punchFragment == null) {
+            punchFragment = new PunchFragment();
+        }
+        if (recordsFragment == null) {
+            recordsFragment = new RecordsFragment();
+        }
+        if (configFragment == null) {
+            configFragment = new ConfigFragment();
+        }
+        currentFragment = findVisibleMainFragment(fragmentManager);
 
-        showFragment(punchFragment);
+        int selectedNavItem = savedInstanceState == null
+                ? R.id.nav_punch
+                : savedInstanceState.getInt(STATE_SELECTED_NAV_ITEM, R.id.nav_punch);
+        bottomNav.setSelectedItemId(selectedNavItem);
+        showFragment(fragmentForNavItem(selectedNavItem));
 
         bottomNav.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
@@ -94,6 +110,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        outState.putInt(STATE_SELECTED_NAV_ITEM, bottomNav.getSelectedItemId());
+        super.onSaveInstanceState(outState);
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         KioskManager.enterIfPossible(this);
@@ -111,6 +133,7 @@ public class MainActivity extends AppCompatActivity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
+            KioskManager.cancelPendingAppTaskRestore();
             UpdateInstallStateReceiver.acknowledgeUpdatedAppLaunch(this);
             return;
         }
@@ -128,7 +151,7 @@ public class MainActivity extends AppCompatActivity {
     private void showFragment(Fragment fragment) {
         FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
         if (!fragment.isAdded()) {
-            transaction.add(R.id.fragment_container, fragment);
+            transaction.add(R.id.fragment_container, fragment, tagForFragment(fragment));
         }
         if (currentFragment != null && currentFragment != fragment) {
             if (currentFragment == recordsFragment) {
@@ -142,6 +165,55 @@ public class MainActivity extends AppCompatActivity {
         if (fragment == recordsFragment) {
             recordsFragment.onPanelEntered();
         }
+    }
+
+    private Fragment fragmentForNavItem(int itemId) {
+        if (itemId == R.id.nav_records) {
+            return recordsFragment;
+        }
+        if (itemId == R.id.nav_config) {
+            return configFragment;
+        }
+        return punchFragment;
+    }
+
+    private String tagForFragment(Fragment fragment) {
+        if (fragment == recordsFragment) {
+            return TAG_RECORDS;
+        }
+        if (fragment == configFragment) {
+            return TAG_CONFIG;
+        }
+        return TAG_PUNCH;
+    }
+
+    private Fragment findVisibleMainFragment(FragmentManager fragmentManager) {
+        for (Fragment fragment : fragmentManager.getFragments()) {
+            if (!fragment.isHidden()
+                    && (fragment instanceof PunchFragment
+                    || fragment instanceof RecordsFragment
+                    || fragment instanceof ConfigFragment)) {
+                return fragment;
+            }
+        }
+        return null;
+    }
+
+    private <T extends Fragment> T findRestoredFragment(
+            FragmentManager fragmentManager,
+            String tag,
+            Class<T> fragmentClass
+    ) {
+        Fragment taggedFragment = fragmentManager.findFragmentByTag(tag);
+        if (fragmentClass.isInstance(taggedFragment)) {
+            return fragmentClass.cast(taggedFragment);
+        }
+        for (Fragment fragment : fragmentManager.getFragments()) {
+            if (fragmentClass.isInstance(fragment)) {
+                return fragmentClass.cast(fragment);
+            }
+        }
+        return null;
     }
 
     private void updateBanner(boolean online) {

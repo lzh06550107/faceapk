@@ -9,7 +9,6 @@ import android.content.pm.PackageManager;
 import android.location.LocationManager;
 import android.net.Uri;
 import android.net.wifi.ScanResult;
-import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -49,6 +48,7 @@ public final class WifiConfigDialogHelper {
     private AutoCompleteTextView pendingWifiScanSsidInput;
     private AlertDialog currentDialog;
     private Runnable wifiConnectCheckRunnable;
+    private boolean manualWifiConfigurationInProgress;
 
     public WifiConfigDialogHelper(AppCompatActivity activity) {
         this.activity = activity;
@@ -128,6 +128,7 @@ public final class WifiConfigDialogHelper {
         dialog.setOnDismissListener(d -> {
             currentDialog = null;
             cancelPendingWifiConnectCheck();
+            finishManualWifiConfiguration("dialog_dismissed");
             unregisterWifiScanReceiver();
             clearPendingWifiScan();
         });
@@ -140,6 +141,7 @@ public final class WifiConfigDialogHelper {
 
     public void onDestroy() {
         cancelPendingWifiConnectCheck();
+        finishManualWifiConfiguration("helper_destroyed");
         unregisterWifiScanReceiver();
         clearPendingWifiScan();
     }
@@ -217,49 +219,84 @@ public final class WifiConfigDialogHelper {
         });
     }
 
-    @SuppressWarnings("deprecation")
     private void connectConfiguredWifi(String ssid, String password, Button connectButton) {
         Context context = activity;
         if (!KioskManager.isDeviceOwner(context)) {
             Toast.makeText(context, "当前不是 Device Owner，无法静默配置 Wi-Fi", Toast.LENGTH_LONG).show();
             return;
         }
-        WifiManager wifiManager = getWifiManager();
-        if (wifiManager == null) {
-            Toast.makeText(context, "Wi-Fi 服务不可用", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        cancelPendingWifiConnectCheck();
+        beginManualWifiConfiguration("manual_wifi_connect");
+        connectButton.setEnabled(false);
+        connectButton.setText("连接中...");
+        submitWifiConnectionWhenReady(
+                ssid,
+                password,
+                connectButton,
+                System.currentTimeMillis()
+        );
+    }
 
-        try {
-            wifiManager.setWifiEnabled(true);
+    private void submitWifiConnectionWhenReady(String ssid,
+                                               String password,
+                                               Button connectButton,
+                                               long startedAt) {
+        wifiConnectCheckRunnable = new Runnable() {
+            @Override
+            public void run() {
+                WifiAutoReconnectManager.AttemptResult result =
+                        WifiAutoReconnectManager.attemptWifiConnection(
+                                activity,
+                                ssid,
+                                password
+                        );
+                if (result == WifiAutoReconnectManager.AttemptResult.WIFI_ENABLING) {
+                    if (System.currentTimeMillis() - startedAt >= WIFI_CONNECT_TIMEOUT_MS) {
+                        finishWifiConnectSubmissionFailure(
+                                connectButton,
+                                "Wi-Fi 开启超时，请稍后重试"
+                        );
+                        return;
+                    }
+                    mainHandler.postDelayed(this, WIFI_CONNECT_POLL_INTERVAL_MS);
+                    return;
+                }
+                if (result == WifiAutoReconnectManager.AttemptResult.SUBMITTED
+                        || result == WifiAutoReconnectManager.AttemptResult.ALREADY_CONNECTED) {
+                    waitForWifiConnection(ssid, password, connectButton);
+                    return;
+                }
 
-            WifiConfiguration config = new WifiConfiguration();
-            config.SSID = quoteWifiValue(ssid);
-            if (password == null || password.isEmpty()) {
-                config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
-            } else {
-                config.preSharedKey = quoteWifiValue(password);
-                config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+                String message;
+                switch (result) {
+                    case NOT_DEVICE_OWNER:
+                        message = "设备未获得 Device Owner 权限，无法写入 Wi-Fi 配置";
+                        break;
+                    case WIFI_SERVICE_UNAVAILABLE:
+                        message = "Wi-Fi 服务不可用";
+                        break;
+                    case NETWORK_CONFIG_FAILED:
+                        message = "Wi-Fi 配置写入失败，请确认网络为开放或 WPA/WPA2 类型";
+                        break;
+                    case PERMISSION_DENIED:
+                        message = "配置 Wi-Fi 失败：权限不足";
+                        break;
+                    default:
+                        message = "Wi-Fi 连接请求失败，请稍后重试";
+                        break;
+                }
+                finishWifiConnectSubmissionFailure(connectButton, message);
             }
+        };
+        mainHandler.post(wifiConnectCheckRunnable);
+    }
 
-            int networkId = wifiManager.addNetwork(config);
-            if (networkId < 0) {
-                Toast.makeText(context, "Wi-Fi 配置写入失败", Toast.LENGTH_LONG).show();
-                return;
-            }
-            wifiManager.disconnect();
-            boolean enabled = wifiManager.enableNetwork(networkId, true);
-            wifiManager.reconnect();
-            if (!enabled) {
-                Toast.makeText(context, "Wi-Fi 连接请求失败", Toast.LENGTH_LONG).show();
-                return;
-            }
-            waitForWifiConnection(ssid, password, connectButton);
-        } catch (SecurityException e) {
-            Toast.makeText(context, "配置 Wi-Fi 失败：权限不足", Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            Toast.makeText(context, "配置 Wi-Fi 失败：" + safeMessage(e), Toast.LENGTH_LONG).show();
-        }
+    private void finishWifiConnectSubmissionFailure(Button connectButton, String message) {
+        connectButton.setEnabled(true);
+        connectButton.setText("连接");
+        cancelPendingWifiConnectCheck();
+        finishManualWifiConfiguration("manual_wifi_failed");
+        Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
     }
 
     private boolean hasWifiScanPermission() {
@@ -377,7 +414,7 @@ public final class WifiConfigDialogHelper {
     private void waitForWifiConnection(String ssid, String password, Button connectButton) {
         WifiManager wifiManager = getWifiManager();
         if (wifiManager == null) {
-            Toast.makeText(activity, "Wi-Fi 服务不可用", Toast.LENGTH_SHORT).show();
+            finishWifiConnectSubmissionFailure(connectButton, "Wi-Fi 服务不可用");
             return;
         }
         cancelPendingWifiConnectCheck();
@@ -393,6 +430,7 @@ public final class WifiConfigDialogHelper {
                     connectButton.setText("连接");
                     cancelPendingWifiConnectCheck();
                     SessionManager.get().saveLastWifiConfig(ssid, password);
+                    finishManualWifiConfiguration("manual_wifi_connected");
                     Toast.makeText(activity, "Wi-Fi 连接成功", Toast.LENGTH_SHORT).show();
                     if (currentDialog != null && currentDialog.isShowing()) {
                         currentDialog.dismiss();
@@ -403,6 +441,7 @@ public final class WifiConfigDialogHelper {
                     connectButton.setEnabled(true);
                     connectButton.setText("连接");
                     cancelPendingWifiConnectCheck();
+                    finishManualWifiConfiguration("manual_wifi_timeout");
                     Toast.makeText(activity, "Wi-Fi 连接超时，请稍后重试", Toast.LENGTH_LONG).show();
                     return;
                 }
@@ -433,6 +472,22 @@ public final class WifiConfigDialogHelper {
         }
     }
 
+    private void beginManualWifiConfiguration(String reason) {
+        if (manualWifiConfigurationInProgress) {
+            return;
+        }
+        manualWifiConfigurationInProgress = true;
+        WifiReconnectCoordinator.get(activity).beginManualWifiConfiguration(reason);
+    }
+
+    private void finishManualWifiConfiguration(String reason) {
+        if (!manualWifiConfigurationInProgress) {
+            return;
+        }
+        manualWifiConfigurationInProgress = false;
+        WifiReconnectCoordinator.get(activity).finishManualWifiConfiguration(reason);
+    }
+
     private WifiManager getWifiManager() {
         Context appContext = activity.getApplicationContext();
         return (WifiManager) appContext.getSystemService(Context.WIFI_SERVICE);
@@ -449,11 +504,6 @@ public final class WifiConfigDialogHelper {
             wifiScanReceiverRegistered = false;
             wifiScanReceiver = null;
         }
-    }
-
-    private String quoteWifiValue(String value) {
-        String safeValue = value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
-        return "\"" + safeValue + "\"";
     }
 
     private String stripWifiQuotes(String value) {

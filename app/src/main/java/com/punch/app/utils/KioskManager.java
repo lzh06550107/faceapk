@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityManager.AppTask;
 import android.app.ActivityManager.RecentTaskInfo;
+import android.app.KeyguardManager;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
@@ -14,6 +15,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.view.KeyEvent;
 import android.os.UserManager;
 
@@ -24,14 +26,18 @@ import com.punch.app.receiver.KioskDeviceAdminReceiver;
 public final class KioskManager {
     private static final String TAG = "KioskManager";
     private static final long[] ENTER_RETRY_DELAYS_MS = {200L, 600L, 1200L};
+    private static final long RESTORE_DELAY_MS = 500L;
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static final DevicePolicyApplyGate OWNER_POLICY_GATE = new DevicePolicyApplyGate();
     private static volatile boolean uiTestBypassEnabled = false;
+    private static volatile boolean deviceTestMaintenanceModeEnabled = false;
+    private static Runnable pendingAppTaskRestore;
 
     private KioskManager() {
     }
 
     public static void enterIfPossible(Activity activity) {
-        if (uiTestBypassEnabled) {
+        if (uiTestBypassEnabled || deviceTestMaintenanceModeEnabled) {
             return;
         }
         enterIfPossible(activity, 0);
@@ -148,7 +154,7 @@ public final class KioskManager {
     }
 
     public static boolean shouldBlockSystemKey(int keyCode) {
-        if (uiTestBypassEnabled) {
+        if (uiTestBypassEnabled || deviceTestMaintenanceModeEnabled) {
             return false;
         }
         if (!SessionManager.get().isKioskEnabled()) {
@@ -181,7 +187,7 @@ public final class KioskManager {
     }
 
     public static void ensureOwnerKioskPolicies(Context context) {
-        if (uiTestBypassEnabled) {
+        if (uiTestBypassEnabled || deviceTestMaintenanceModeEnabled) {
             return;
         }
         DevicePolicyManager dpm = getDevicePolicyManager(context);
@@ -192,6 +198,10 @@ public final class KioskManager {
         if (!dpm.isDeviceOwnerApp(context.getPackageName())) {
             return;
         }
+        if (!OWNER_POLICY_GATE.tryBegin()) {
+            return;
+        }
+        boolean applied = false;
         try {
             dpm.clearPackagePersistentPreferredActivities(admin, context.getPackageName());
             dpm.setLockTaskPackages(admin, new String[]{context.getPackageName()});
@@ -215,8 +225,113 @@ public final class KioskManager {
                     new ComponentName(context, "com.punch.app.activity.KioskHomeActivity")
             );
             AppLogger.i(TAG, "Applied kiosk owner policies");
+            applied = true;
         } catch (Exception e) {
             AppLogger.e(TAG, "Failed to apply kiosk owner policies", e);
+        } finally {
+            OWNER_POLICY_GATE.finish(applied);
+        }
+    }
+
+    public static void setDeviceTestMaintenanceModeForTest(boolean enabled) {
+        deviceTestMaintenanceModeEnabled = enabled;
+        OWNER_POLICY_GATE.invalidate();
+        if (enabled) {
+            cancelPendingAppTaskRestore();
+        }
+    }
+
+    public static boolean isDeviceTestMaintenanceModeForTest() {
+        return deviceTestMaintenanceModeEnabled;
+    }
+
+    public static boolean enterDeviceTestMaintenanceMode(Context context, String[] testPackages) {
+        if (context == null) {
+            return false;
+        }
+        DevicePolicyManager dpm = getDevicePolicyManager(context);
+        ComponentName admin = getAdminComponent(context);
+        if (dpm == null || admin == null || !dpm.isDeviceOwnerApp(context.getPackageName())) {
+            AppLogger.w(TAG, "Device-test maintenance requires active Device Owner");
+            return false;
+        }
+
+        setDeviceTestMaintenanceModeForTest(true);
+        SessionManager.get().saveKioskEnabled(false);
+        cancelPendingAppTaskRestore();
+
+        try {
+            dpm.clearPackagePersistentPreferredActivities(admin, context.getPackageName());
+            dpm.setStatusBarDisabled(admin, false);
+            dpm.setKeyguardDisabled(admin, false);
+
+            if (testPackages != null && testPackages.length > 0) {
+                for (String packageName : testPackages) {
+                    if (packageName == null || packageName.trim().isEmpty()) {
+                        continue;
+                    }
+                    try {
+                        dpm.setApplicationHidden(admin, packageName, false);
+                    } catch (Exception e) {
+                        AppLogger.w(TAG, "Unable to unhide test package " + packageName + ": " + e.getMessage());
+                    }
+                }
+                try {
+                    String[] failures = dpm.setPackagesSuspended(admin, testPackages, false);
+                    if (failures != null && failures.length > 0) {
+                        AppLogger.w(TAG, "Some test packages could not be unsuspended: " + java.util.Arrays.toString(failures));
+                    }
+                } catch (Exception e) {
+                    AppLogger.w(TAG, "Unable to unsuspend test packages: " + e.getMessage());
+                }
+            }
+
+            // Important: do not call Activity.stopLockTask() here. The maintenance
+            // controller is not guaranteed to be the Activity that originally called
+            // startLockTask(). On Android 6.0+ a DPC exits the active lock task by
+            // revoking the locked package's allowlist authorization. Keep the
+            // allowlist empty for the entire maintenance window so Smoke activities
+            // cannot automatically re-enter lock task via android:lockTaskMode.
+            dpm.setLockTaskPackages(admin, new String[]{});
+
+            AppLogger.i(TAG, "Entered Device Owner test maintenance policy; waiting for LockTask to exit");
+            return true;
+        } catch (Exception e) {
+            AppLogger.e(TAG, "Failed to enter Device Owner test maintenance mode", e);
+            return false;
+        }
+    }
+
+    public static boolean restoreDeviceOwnerKioskAfterTest(Context context, String[] testPackages) {
+        if (context == null) {
+            return false;
+        }
+        DevicePolicyManager dpm = getDevicePolicyManager(context);
+        ComponentName admin = getAdminComponent(context);
+        if (dpm == null || admin == null || !dpm.isDeviceOwnerApp(context.getPackageName())) {
+            AppLogger.w(TAG, "Device-test restore requires active Device Owner");
+            return false;
+        }
+
+        try {
+            if (testPackages != null && testPackages.length > 0) {
+                try {
+                    String[] failures = dpm.setPackagesSuspended(admin, testPackages, true);
+                    if (failures != null && failures.length > 0) {
+                        AppLogger.w(TAG, "Some test packages could not be re-suspended: " + java.util.Arrays.toString(failures));
+                    }
+                } catch (Exception e) {
+                    AppLogger.w(TAG, "Unable to re-suspend test packages: " + e.getMessage());
+                }
+            }
+            SessionManager.get().saveKioskEnabled(true);
+            setDeviceTestMaintenanceModeForTest(false);
+            ensureOwnerKioskPolicies(context);
+            AppLogger.i(TAG, "Restored Device Owner kiosk policies after test maintenance");
+            return true;
+        } catch (Exception e) {
+            AppLogger.e(TAG, "Failed to restore Device Owner kiosk after test maintenance", e);
+            return false;
         }
     }
 
@@ -244,6 +359,7 @@ public final class KioskManager {
     }
 
     private static void clearOwnerPolicies(Context context) {
+        OWNER_POLICY_GATE.invalidate();
         DevicePolicyManager dpm = getDevicePolicyManager(context);
         ComponentName admin = getAdminComponent(context);
         if (dpm == null || admin == null) {
@@ -276,19 +392,53 @@ public final class KioskManager {
     }
 
     public static void restoreAppTaskSoon(Context context) {
-        if (uiTestBypassEnabled) {
+        if (uiTestBypassEnabled || deviceTestMaintenanceModeEnabled) {
             return;
         }
-        if (context == null || !SessionManager.get().isKioskEnabled() || !isDeviceOwner(context)) {
+        if (!canAttemptForegroundRestore(context)) {
             return;
         }
         Context appContext = context.getApplicationContext();
-        MAIN_HANDLER.post(() -> bringExistingAppTaskToFrontQuietly(appContext, -1));
-        MAIN_HANDLER.postDelayed(() -> bringExistingAppTaskToFrontQuietly(appContext, -1), 80L);
-        MAIN_HANDLER.postDelayed(() -> bringExistingAppTaskToFrontQuietly(appContext, -1), 180L);
+        cancelPendingAppTaskRestore();
+        pendingAppTaskRestore = () -> {
+            pendingAppTaskRestore = null;
+            if (canAttemptForegroundRestore(appContext)) {
+                bringExistingAppTaskToFrontQuietly(appContext, -1);
+            }
+        };
+        MAIN_HANDLER.postDelayed(pendingAppTaskRestore, RESTORE_DELAY_MS);
+    }
+
+    public static void cancelPendingAppTaskRestore() {
+        Runnable pending = pendingAppTaskRestore;
+        if (pending != null) {
+            MAIN_HANDLER.removeCallbacks(pending);
+            pendingAppTaskRestore = null;
+        }
+    }
+
+    public static boolean shouldRestoreAppTask(
+            Context context,
+            boolean changingConfigurations,
+            int resumedActivityCount
+    ) {
+        if (context == null || deviceTestMaintenanceModeEnabled) {
+            return false;
+        }
+        return KioskRestorePolicy.shouldRestore(
+                SessionManager.get().isKioskEnabled(),
+                isDeviceOwner(context),
+                isScreenInteractive(context),
+                isKeyguardLocked(context),
+                changingConfigurations,
+                resumedActivityCount
+        );
     }
 
     private static boolean bringExistingAppTaskToFront(Context context, int excludedTaskId, boolean logSuccess) {
+        if (!canAttemptForegroundRestore(context)) {
+            return false;
+        }
         ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (am == null) {
             return false;
@@ -321,6 +471,21 @@ public final class KioskManager {
         return false;
     }
 
+    private static boolean canAttemptForegroundRestore(Context context) {
+        return shouldRestoreAppTask(context, false, 0);
+    }
+
+    private static boolean isScreenInteractive(Context context) {
+        PowerManager powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        return powerManager != null && powerManager.isInteractive();
+    }
+
+    private static boolean isKeyguardLocked(Context context) {
+        KeyguardManager keyguardManager =
+                (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
+        return keyguardManager != null && keyguardManager.isKeyguardLocked();
+    }
+
     private static boolean isOwnNonHomeTask(Context context, RecentTaskInfo taskInfo) {
         Intent baseIntent = taskInfo.baseIntent;
         ComponentName component = baseIntent == null ? null : baseIntent.getComponent();
@@ -348,5 +513,6 @@ public final class KioskManager {
 
     public static void setUiTestBypassForTest(boolean enabled) {
         uiTestBypassEnabled = enabled;
+        OWNER_POLICY_GATE.invalidate();
     }
 }

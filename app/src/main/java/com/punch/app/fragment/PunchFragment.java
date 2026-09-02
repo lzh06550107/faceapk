@@ -54,6 +54,7 @@ import com.punch.app.face.FaceManager;
 import com.punch.app.model.Employee;
 import com.punch.app.model.PunchRecord;
 import com.punch.app.network.InteractionLogger;
+import com.punch.app.service.PunchPersistence;
 import com.punch.app.service.SyncService;
 import com.punch.app.utils.AvatarLoader;
 import com.punch.app.utils.AppLogger;
@@ -379,6 +380,9 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     private void setPunchEnabled(boolean enabled) {
         punchEnabled = enabled;
+        if (faceFrameView != null) {
+            faceFrameView.setScanAnimationEnabled(enabled && punchActive);
+        }
         if (!enabled) {
             clearFaceInteraction();
             setRecognizing(false);
@@ -387,6 +391,11 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             if (layoutResult != null) {
                 layoutResult.setVisibility(View.GONE);
             }
+            waitingFirstPreviewFrame = false;
+            hideCameraLoading();
+            releaseCamera();
+        } else {
+            ensureCameraReady();
         }
         updatePunchToggleLabel();
         updateIdleStatus();
@@ -1366,7 +1375,12 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     
     private void ensureCameraReady() {
         cancelDelayedCameraRelease();
-        if (!isAdded() || textureView == null || !textureView.isAvailable() || isHidden()) {
+        if (!isAdded() || textureView == null || !PunchCameraPolicy.shouldUseCamera(
+                punchActive,
+                punchEnabled,
+                textureView.isAvailable(),
+                isHidden()
+        )) {
             return;
         }
         if (!hasCameraPermission()) {
@@ -1429,13 +1443,13 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             scheduleCameraRelease();
         } else {
             punchActive = true;
-            setPunchEnabled(false);
+            setPunchEnabled(PunchCameraPolicy.shouldEnablePunchOnVisibleEntry(
+                    getResources().getBoolean(R.bool.camera_face_soak_auto_enable)));
             updateScreenAwakeState();
             if (tvLine != null) {
                 refreshBindingHeader();
             }
             rebuildPunchOptions();
-            ensureCameraReady();
         }
     }
 
@@ -1979,7 +1993,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
 
     
     private void savePunchAndSync(PunchRecord record) {
-        boolean inserted = DatabaseHelper.get(requireContext()).insertPunchRecord(record);
+        boolean inserted = PunchPersistence.persist(
+                requireContext(), record, Constants.ACTION_PUNCH_PUSH);
         if (!inserted) {
             Employee employee = DatabaseHelper.get(requireContext()).getEmployee(record.empId);
             postToActiveView(() -> {
@@ -2002,8 +2017,6 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             });
             return;
         }
-        DatabaseHelper.get(requireContext()).enqueueSyncItem(
-                record.clientRecordId, Constants.ACTION_PUNCH_PUSH);
         postToActiveView(() -> showPunchResult(record, false, true));
     }
 
@@ -2338,7 +2351,8 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
     public void onResume() {
         super.onResume();
         punchActive = !isHidden();
-        setPunchEnabled(false);
+        setPunchEnabled(PunchCameraPolicy.shouldEnablePunchOnVisibleEntry(
+                getResources().getBoolean(R.bool.camera_face_soak_auto_enable)));
         updateScreenAwakeState();
         refreshBindingHeader();
         PunchApplication app = PunchApplication.get();
@@ -2346,7 +2360,6 @@ public class PunchFragment extends Fragment implements TextureView.SurfaceTextur
             renderPunchStatusSnapshot(app.getPunchStatusSnapshot());
         }
         rebuildPunchOptions();
-        ensureCameraReady();
     }
 
     @Override

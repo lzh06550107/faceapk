@@ -36,5 +36,19 @@
             android:screenOrientation="portrait"
             android:taskAffinity="com.punch.app.smoke.uitest"
             android:theme="@style/AppTheme" />
+        <activity
+            android:name=".activity.UiTestKioskHomeHostActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.punch.app.smoke.uitest.kiosk_home"
+            android:theme="@style/KioskHomeTheme" />
+        <activity
+            android:name=".activity.UiTestRecordsHostActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.punch.app.smoke.uitest.records"
+            android:theme="@style/AppTheme" />
     </application>
 </manifest>

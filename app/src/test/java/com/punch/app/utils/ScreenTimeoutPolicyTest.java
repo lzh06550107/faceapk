@@ -32,6 +32,12 @@ public class ScreenTimeoutPolicyTest {
         assertFalse(ScreenTimeoutPolicy.isSupportedTimeoutMs(45_000L));
     }
 
+
+    @Test
+    public void defaultTimeoutIsThirtySeconds() {
+        assertEquals(30_000L, ScreenTimeoutPolicy.DEFAULT_TIMEOUT_MS);
+    }
+
     @Test
     public void idlePunchScreenOnlyStaysOnForKeepOnConfiguration() {
         assertTrue(ScreenTimeoutPolicy.shouldKeepScreenOn(0L, false, true));

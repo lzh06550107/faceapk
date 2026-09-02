@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:name=".camerafacerecovery.CameraFaceRecoveryTestApplication"
+        tools:replace="android:name">
+        <receiver
+            android:name=".camerafacerecovery.CameraFaceRecoveryTestReceiver"
+            android:enabled="true"
+            android:exported="true" />
+        <receiver
+            android:name=".receiver.UpdateInstallStateReceiver"
+            tools:node="remove" />
+    </application>
+</manifest>

@@ -750,7 +750,7 @@ public class SessionManager {
     }
 
     public boolean isLivenessCheck() {
-        return prefs.getBoolean(Constants.KEY_LIVENESS_CHECK, false);
+        return prefs.getBoolean(Constants.KEY_LIVENESS_CHECK, Constants.DEFAULT_LIVENESS_CHECK);
     }
 
     public void saveLivenessCheck(boolean value) {

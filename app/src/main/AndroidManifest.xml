@@ -49,9 +49,6 @@
             android:name=".activity.KioskHomeActivity"
             android:excludeFromRecents="true"
             android:exported="true"
-            android:finishOnTaskLaunch="true"
-            android:lockTaskMode="if_whitelisted"
-            android:noHistory="true"
             android:screenOrientation="portrait"
             android:taskAffinity="com.punch.app.kiosk_home"
             android:theme="@style/KioskHomeTheme">

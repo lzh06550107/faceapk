@@ -1,5 +1,8 @@
 package com.punch.app.utils;
 
+import android.app.Activity;
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.widget.ImageView;
@@ -9,6 +12,7 @@ import androidx.annotation.Nullable;
 
 import com.bumptech.glide.RequestBuilder;
 import com.bumptech.glide.Glide;
+import com.bumptech.glide.RequestManager;
 import com.bumptech.glide.load.DataSource;
 import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.load.engine.GlideException;
@@ -33,7 +37,7 @@ public final class AvatarLoader {
                             @Nullable String source) {
         fallbackView.setText(buildAvatarText(displayName));
         fallbackView.setVisibility(TextView.VISIBLE);
-        Glide.with(imageView).clear(imageView);
+        clearRequest(imageView);
         imageView.setImageDrawable(null);
         imageView.setVisibility(ImageView.INVISIBLE);
 
@@ -42,7 +46,12 @@ public final class AvatarLoader {
             return;
         }
 
-        RequestBuilder<Drawable> requestBuilder = Glide.with(imageView)
+        RequestManager requestManager = requestManagerFor(imageView, false);
+        if (requestManager == null) {
+            return;
+        }
+
+        RequestBuilder<Drawable> requestBuilder = requestManager
                 .load(model)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .circleCrop()
@@ -75,9 +84,60 @@ public final class AvatarLoader {
     }
 
     public static void clear(ImageView imageView) {
-        Glide.with(imageView).clear(imageView);
+        clearRequest(imageView);
         imageView.setImageDrawable(null);
         imageView.setVisibility(ImageView.INVISIBLE);
+    }
+
+    private static void clearRequest(ImageView imageView) {
+        RequestManager requestManager = requestManagerFor(imageView, true);
+        if (requestManager != null) {
+            requestManager.clear(imageView);
+        }
+    }
+
+    @Nullable
+    private static RequestManager requestManagerFor(ImageView imageView, boolean clearing) {
+        Context context = imageView.getContext();
+        boolean ownerDestroyed = isOwnerDestroyedOrFinishing(context);
+        AvatarLoadPolicy.RequestManagerChoice choice =
+                AvatarLoadPolicy.chooseRequestManager(clearing, ownerDestroyed);
+        try {
+            if (choice == AvatarLoadPolicy.RequestManagerChoice.VIEW) {
+                return Glide.with(imageView);
+            }
+            if (choice == AvatarLoadPolicy.RequestManagerChoice.APPLICATION_CONTEXT) {
+                Context appContext = context.getApplicationContext();
+                return appContext != null ? Glide.with(appContext) : null;
+            }
+        } catch (IllegalArgumentException ignored) {
+            if (clearing) {
+                Context appContext = context.getApplicationContext();
+                return appContext != null ? Glide.with(appContext) : null;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isOwnerDestroyedOrFinishing(Context context) {
+        Activity activity = findActivity(context);
+        return activity != null && (activity.isFinishing() || activity.isDestroyed());
+    }
+
+    @Nullable
+    private static Activity findActivity(Context context) {
+        Context current = context;
+        while (current instanceof ContextWrapper) {
+            if (current instanceof Activity) {
+                return (Activity) current;
+            }
+            Context baseContext = ((ContextWrapper) current).getBaseContext();
+            if (baseContext == null || baseContext == current) {
+                return null;
+            }
+            current = baseContext;
+        }
+        return null;
     }
 
     private static Object buildModel(@Nullable String rawSource) {

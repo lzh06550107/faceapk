@@ -20,6 +20,8 @@ public class FaceRegistrationManager {
     private static FaceRegistrationManager instance;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService downloadExecutor = Executors.newFixedThreadPool(
+            ParallelDownloadBatchRunner.DEFAULT_DOWNLOAD_PARALLELISM);
 
     public static FaceRegistrationManager get() {
         if (instance == null) {
@@ -69,6 +71,7 @@ public class FaceRegistrationManager {
     public void refreshEmployee(Context ctx, Employee emp, Callback callback) {
         executor.execute(() -> {
             FaceManager.get().removeFace(emp.id);
+            DatabaseHelper.get(ctx).deleteFaceFeature(emp.id);
             DatabaseHelper.get(ctx).updateFaceRegistration(emp.id, null, false);
             RegistrationResult result = registerSingle(ctx, emp, true);
             boolean success = result.success;
@@ -81,33 +84,73 @@ public class FaceRegistrationManager {
     private List<RegistrationResult> registerEmployeesInternal(Context ctx,
                                                               List<Employee> employees,
                                                               boolean addToRuntimeLibrary) {
-        List<RegistrationResult> results = new ArrayList<>();
+        List<Employee> validEmployees = new ArrayList<>();
         if (employees == null) {
-            return results;
+            return new ArrayList<>();
         }
         for (Employee emp : employees) {
             if (emp == null || emp.id == null || emp.id.trim().isEmpty()) {
                 continue;
             }
-            results.add(registerSingle(ctx, emp, addToRuntimeLibrary));
+            validEmployees.add(emp);
         }
+        if (validEmployees.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        long startedAt = System.currentTimeMillis();
+        Log.i(TAG, "Face batch begin: employees=" + validEmployees.size()
+                + " downloadParallelism=" + ParallelDownloadBatchRunner.DEFAULT_DOWNLOAD_PARALLELISM
+                + " faceSdkSerial=true");
+        long[] batchMetrics = new long[2];
+        List<RegistrationResult> results = ParallelDownloadBatchRunner.run(
+                validEmployees,
+                downloadExecutor,
+                emp -> downloadFaceImage(ctx, emp),
+                (emp, downloadResult) -> registerDownloadedFace(
+                        ctx, emp, downloadResult, addToRuntimeLibrary),
+                (emp, error) -> {
+                    Log.e(TAG, "Face image preparation crashed: empId=" + emp.id, error);
+                    return RegistrationResult.fail(emp.id, FAIL_MSG_FACE_IMAGE_DOWNLOAD_FAILED);
+                },
+                (downloadWaitMs, processMs) -> {
+                    batchMetrics[0] = downloadWaitMs;
+                    batchMetrics[1] = processMs;
+                }
+        );
+        Log.i(TAG, "Face batch end: employees=" + validEmployees.size()
+                + " elapsedMs=" + (System.currentTimeMillis() - startedAt)
+                + " download_wait_ms=" + batchMetrics[0]
+                + " face_process_ms=" + batchMetrics[1]);
         return results;
     }
 
     private RegistrationResult registerSingle(Context ctx, Employee emp, boolean addToRuntimeLibrary) {
+        FaceFileManager.DownloadResult downloadResult = downloadFaceImage(ctx, emp);
+        return registerDownloadedFace(ctx, emp, downloadResult, addToRuntimeLibrary);
+    }
+
+    private FaceFileManager.DownloadResult downloadFaceImage(Context ctx, Employee emp) {
         if (emp.faceImageUrl == null || emp.faceImageUrl.trim().isEmpty()) {
             Log.w(TAG, "Face image url is empty: empId=" + emp.id);
-            return RegistrationResult.fail(emp.id, FAIL_MSG_FACE_IMAGE_URL_EMPTY);
+            return FaceFileManager.DownloadResult.fail(FAIL_MSG_FACE_IMAGE_URL_EMPTY);
         }
-
-        FaceFileManager.DownloadResult downloadResult = FaceFileManager.downloadAndVerify(
+        return FaceFileManager.downloadAndVerify(
                 ctx,
                 emp.id,
                 emp.faceImageUrl,
                 emp.faceImageSha256
         );
-        if (!downloadResult.success) {
-            String failMsg = downloadResult.failMsg == null || downloadResult.failMsg.trim().isEmpty()
+    }
+
+    private RegistrationResult registerDownloadedFace(Context ctx,
+                                                      Employee emp,
+                                                      FaceFileManager.DownloadResult downloadResult,
+                                                      boolean addToRuntimeLibrary) {
+        if (downloadResult == null || !downloadResult.success) {
+            String failMsg = downloadResult == null
+                    || downloadResult.failMsg == null
+                    || downloadResult.failMsg.trim().isEmpty()
                     ? FAIL_MSG_FACE_IMAGE_DOWNLOAD_FAILED
                     : downloadResult.failMsg.trim();
             Log.w(TAG, "Download/verify failed: empId=" + emp.id + " reason=" + failMsg);
@@ -115,8 +158,8 @@ public class FaceRegistrationManager {
         }
 
         FaceManager.RegisterResult result = addToRuntimeLibrary
-                ? FaceManager.get().registerFace(ctx, emp.id, downloadResult.path)
-                : FaceManager.get().validateFaceImage(ctx, emp.id, downloadResult.path);
+                ? FaceManager.get().registerFace(ctx, emp, downloadResult.path)
+                : FaceManager.get().validateFaceImage(ctx, emp, downloadResult.path);
         if (result.success) {
             DatabaseHelper.get(ctx).updateFaceRegistration(emp.id, result.localFaceId, true);
             return RegistrationResult.ok(emp.id);

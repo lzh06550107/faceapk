@@ -5,13 +5,14 @@ plugins {
 android {
     namespace 'com.punch.app'
     compileSdk 34
+    testBuildType "smoke"
 
     defaultConfig {
         applicationId "com.punch.app"
         minSdk 24
         targetSdk 34
-        versionCode 111
-        versionName "1.1.1"
+        versionCode 117
+        versionName "1.1.7"
         multiDexEnabled true
         testInstrumentationRunner "com.punch.app.test.UiSmokeTestRunner"
 
@@ -35,6 +36,55 @@ android {
             signingConfig signingConfigs.debug
             applicationIdSuffix ".smoke"
             versionNameSuffix "-smoke"
+            matchingFallbacks = ['debug']
+        }
+        deviceOwnerTest {
+            initWith debug
+            debuggable true
+            signingConfig signingConfigs.debug
+            versionNameSuffix "-device-owner-test"
+            matchingFallbacks = ['debug']
+        }
+        cameraFaceSoak {
+            initWith debug
+            debuggable true
+            signingConfig signingConfigs.debug
+            versionNameSuffix "-camera-face-soak"
+            matchingFallbacks = ['debug']
+        }
+        facePunchStress {
+            initWith debug
+            debuggable true
+            signingConfig signingConfigs.debug
+            versionNameSuffix "-face-punch-stress"
+            matchingFallbacks = ['debug']
+        }
+        networkFaultTest {
+            initWith debug
+            debuggable true
+            signingConfig signingConfigs.debug
+            versionNameSuffix "-network-fault-test"
+            matchingFallbacks = ['debug']
+        }
+        dbStressTest {
+            initWith debug
+            debuggable true
+            signingConfig signingConfigs.debug
+            versionNameSuffix "-db-stress-test"
+            matchingFallbacks = ['debug']
+        }
+        processRecoveryTest {
+            initWith debug
+            debuggable true
+            signingConfig signingConfigs.debug
+            versionNameSuffix "-process-recovery-test"
+            matchingFallbacks = ['debug']
+        }
+        cameraFaceRecoveryTest {
+            initWith debug
+            debuggable true
+            signingConfig signingConfigs.debug
+            versionNameSuffix "-camera-face-recovery-test"
             matchingFallbacks = ['debug']
         }
     }

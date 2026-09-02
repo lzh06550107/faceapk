@@ -12,7 +12,7 @@ import com.punch.app.R;
 import com.punch.app.receiver.UpdateInstallStateReceiver;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
-import com.punch.app.utils.WifiAutoReconnectManager;
+import com.punch.app.utils.WifiReconnectCoordinator;
 
 public class SplashActivity extends AppCompatActivity {
     private static final long SPLASH_DELAY_MS = 800L;
@@ -26,7 +26,7 @@ public class SplashActivity extends AppCompatActivity {
             return;
         }
         KioskManager.enterIfPossible(this);
-        WifiAutoReconnectManager.ensureSavedWifiConnection(this);
+        WifiReconnectCoordinator.get(this).requestReconnect("splash");
 
         if (shouldExitKioskForMaintenance()) {
             KioskManager.exitAndDisable(this);

@@ -605,6 +605,8 @@ public final class SyncCoordinator {
                 collectEventResults ? new LinkedHashMap<>() : null;
         LinkedHashMap<String, Employee> registrationTargets =
                 collectEventResults ? new LinkedHashMap<>() : null;
+        LinkedHashMap<String, String> removalTargets =
+                collectEventResults ? new LinkedHashMap<>() : null;
 
         while (true) {
             ApiResult<EmployeeSyncData> result = ApiService.syncEmployees(page);
@@ -630,20 +632,15 @@ public final class SyncCoordinator {
                     continue;
                 }
                 if ("delete".equalsIgnoreCase(changeItem.opType)) {
-                    if (!applyDeleteChange(db, changeItem)) {
-                        if (collectEventResults) {
-                            employeeResults.put(
-                                    changeItem.numbers,
-                                    EventResultDto.EmployeeResult.success(changeItem.numbers, "delete")
-                            );
-                        }
-                        continue;
-                    }
+                    boolean deleteApplied = applyDeleteChange(db, changeItem);
                     if (collectEventResults) {
                         employeeResults.put(
                                 changeItem.numbers,
                                 EventResultDto.EmployeeResult.success(changeItem.numbers, "delete")
                         );
+                        if (deleteApplied) {
+                            removalTargets.put(changeItem.numbers, "delete");
+                        }
                     }
                     continue;
                 }
@@ -677,17 +674,38 @@ public final class SyncCoordinator {
                     continue;
                 }
 
+                boolean faceChanged = hasFaceChanged(existing, incoming);
                 Employee merged = mergeEmployee(existing, incoming);
                 db.upsertEmployee(merged);
                 if (collectEventResults) {
                     EventResultDto.EmployeeResult employeeResult =
                             EventResultDto.EmployeeResult.success(changeItem.numbers, safeOpType(changeItem.opType));
-                    if (isBlank(merged.faceImageUrl)) {
+                    boolean faceEnabled = "enabled".equalsIgnoreCase(safeString(merged.faceStatus));
+                    boolean hasFaceImage = !isBlank(merged.faceImageUrl);
+                    EmployeeFaceDeltaPolicy.Action faceAction = EmployeeFaceDeltaPolicy.classify(
+                            existing != null,
+                            faceChanged,
+                            false,
+                            faceEnabled,
+                            hasFaceImage,
+                            merged.faceRegistered == 1
+                    );
+                    if (faceEnabled && merged.faceRegistered != 1 && !hasFaceImage) {
                         employeeResult.success = false;
                         employeeResult.failMsg = FAILURE_MSG_FACE_IMAGE_URL_EMPTY;
                         AppLogger.w(TAG, "Employee face image url is empty: empId=" + safeString(merged.id));
-                    } else if (merged.faceRegistered != 1) {
+                    } else if (faceAction == EmployeeFaceDeltaPolicy.Action.REGISTER) {
+                        if (faceChanged) {
+                            db.deleteFaceFeature(merged.id);
+                            if (existing != null && existing.faceRegistered == 1) {
+                                removalTargets.put(merged.id, "replace");
+                            }
+                        }
                         registrationTargets.put(merged.id, merged);
+                    } else if (faceAction == EmployeeFaceDeltaPolicy.Action.REMOVE) {
+                        db.deleteFaceFeature(merged.id);
+                        db.updateFaceRegistration(merged.id, null, false);
+                        removalTargets.put(merged.id, safeOpType(changeItem.opType));
                     }
                     employeeResults.put(changeItem.numbers, employeeResult);
                 }
@@ -727,6 +745,25 @@ public final class SyncCoordinator {
             );
         }
 
+        if (collectEventResults
+                && registrationTargets.isEmpty()
+                && removalTargets.isEmpty()) {
+            FaceRegistrationOutcome noFaceChanges =
+                    FaceRegistrationOutcome.success(new ArrayList<>(), 0, 0);
+            if (app != null) {
+                publishPreparationOutcome(app, noFaceChanges);
+            }
+            InteractionLogger.logBusiness(
+                    InteractionLogger.GROUP_EMPLOYEE_SYNC,
+                    "员工事件处理完成",
+                    "本次无运行时人脸变更"
+            );
+            return EmployeeSyncProcessingResult.success(
+                    true,
+                    toEmployeeResultList(employeeResults)
+            );
+        }
+
         if (app != null) {
             app.updatePunchDataPreparationStatus("\u6b63\u5728\u4e0b\u8f7d\u5e76\u6821\u9a8c\u4eba\u8138\u56fe\u7247...");
         }
@@ -736,10 +773,20 @@ public final class SyncCoordinator {
                 collectEventResults ? "仅处理本次事件涉及的人员" : "处理当前全部待注册人员"
         );
         if (collectEventResults) {
-            FaceRegistrationOutcome registrationOutcome = waitForFaceRegistration(
-                    context,
-                    new ArrayList<>(registrationTargets.values())
-            );
+            if (app != null) {
+                app.updatePunchDataPreparationStatus("正在增量更新人脸库...");
+            }
+            for (String empId : removalTargets.keySet()) {
+                FaceManager.get().removeFace(empId);
+                AppLogger.i(TAG, "Incremental face removed: empId=" + safeString(empId));
+            }
+
+            FaceRegistrationOutcome registrationOutcome = registrationTargets.isEmpty()
+                    ? FaceRegistrationOutcome.success(new ArrayList<>(), 0, 0)
+                    : waitForIncrementalFaceRegistration(
+                            context,
+                            new ArrayList<>(registrationTargets.values())
+                    );
             List<EventResultDto.EmployeeResult> finalResults =
                     applyRegistrationResults(employeeResults, registrationOutcome.results);
             if (!registrationOutcome.completed) {
@@ -754,17 +801,11 @@ public final class SyncCoordinator {
                 }
                 InteractionLogger.logBusinessFailure(
                         InteractionLogger.GROUP_EMPLOYEE_SYNC,
-                        "人脸注册未完整完成",
+                        "人脸增量注册未完整完成",
                         FAILURE_MSG_FACE_REGISTRATION_INCOMPLETE
                 );
                 return EmployeeSyncProcessingResult.failure(
                         FAILURE_MSG_FACE_REGISTRATION_INCOMPLETE,
-                        toEmployeeResultList(employeeResults)
-                );
-            }
-            if (!rebuildFinalFaceLibrary(context, app)) {
-                return EmployeeSyncProcessingResult.failure(
-                        STATUS_MSG_FACE_LIBRARY_REBUILD_FAILED,
                         toEmployeeResultList(employeeResults)
                 );
             }
@@ -773,8 +814,10 @@ public final class SyncCoordinator {
             }
             InteractionLogger.logBusiness(
                     InteractionLogger.GROUP_EMPLOYEE_SYNC,
-                    "员工事件处理完成",
-                    "成功 " + registrationOutcome.succeeded + "\n失败 " + registrationOutcome.failed
+                    "员工事件增量处理完成",
+                    "新增/更新成功 " + registrationOutcome.succeeded
+                            + "\n新增/更新失败 " + registrationOutcome.failed
+                            + "\n删除/禁用 " + removalTargets.size()
             );
             return EmployeeSyncProcessingResult.success(true, finalResults);
         }
@@ -804,14 +847,10 @@ public final class SyncCoordinator {
         }
 
         boolean faceUrlChanged = !safeString(existing.faceImageUrl).equals(safeString(incoming.faceImageUrl));
-        boolean faceShaChanged = !isBlank(incoming.faceImageSha256)
-                && !safeString(existing.faceImageSha256).equals(safeString(incoming.faceImageSha256));
-        boolean faceVersionChanged = incoming.faceVersion > 0 && existing.faceVersion != incoming.faceVersion;
         String resolvedFaceStatus = isBlank(incoming.faceStatus)
                 ? safeString(existing.faceStatus)
                 : incoming.faceStatus;
-        boolean faceStatusChanged = !safeString(existing.faceStatus).equals(safeString(resolvedFaceStatus));
-        boolean faceChanged = faceUrlChanged || faceShaChanged || faceVersionChanged || faceStatusChanged;
+        boolean faceChanged = hasFaceChanged(existing, incoming);
         incoming.name = isBlank(incoming.name) ? existing.name : incoming.name;
         incoming.dept = isBlank(incoming.dept) ? existing.dept : incoming.dept;
         incoming.faceImageSha256 = resolveIncomingFaceSha(existing, incoming, faceUrlChanged);
@@ -828,6 +867,25 @@ public final class SyncCoordinator {
             incoming.updatedAt = existing.updatedAt;
         }
         return incoming;
+    }
+
+    private boolean hasFaceChanged(Employee existing, Employee incoming) {
+        if (existing == null) {
+            return true;
+        }
+        boolean faceUrlChanged = !safeString(existing.faceImageUrl)
+                .equals(safeString(incoming.faceImageUrl));
+        boolean faceShaChanged = !isBlank(incoming.faceImageSha256)
+                && !safeString(existing.faceImageSha256)
+                .equals(safeString(incoming.faceImageSha256));
+        boolean faceVersionChanged = incoming.faceVersion > 0
+                && existing.faceVersion != incoming.faceVersion;
+        String resolvedFaceStatus = isBlank(incoming.faceStatus)
+                ? safeString(existing.faceStatus)
+                : incoming.faceStatus;
+        boolean faceStatusChanged = !safeString(existing.faceStatus)
+                .equals(safeString(resolvedFaceStatus));
+        return faceUrlChanged || faceShaChanged || faceVersionChanged || faceStatusChanged;
     }
 
     private String resolveIncomingFaceSha(Employee existing, Employee incoming, boolean faceUrlChanged) {
@@ -857,7 +915,18 @@ public final class SyncCoordinator {
     }
 
     private FaceRegistrationOutcome waitForFaceRegistration(Context context) {
-        return waitForFaceRegistration(context, null);
+        return waitForFaceRegistration(context, null, false);
+    }
+
+    private FaceRegistrationOutcome waitForFaceRegistration(Context context, List<Employee> employees) {
+        return waitForFaceRegistration(context, employees, false);
+    }
+
+    private FaceRegistrationOutcome waitForIncrementalFaceRegistration(
+            Context context,
+            List<Employee> employees
+    ) {
+        return waitForFaceRegistration(context, employees, true);
     }
 
     private boolean rebuildFinalFaceLibrary(Context context, PunchApplication app) {
@@ -878,7 +947,11 @@ public final class SyncCoordinator {
         return success;
     }
 
-    private FaceRegistrationOutcome waitForFaceRegistration(Context context, List<Employee> employees) {
+    private FaceRegistrationOutcome waitForFaceRegistration(
+            Context context,
+            List<Employee> employees,
+            boolean addToRuntimeLibrary
+    ) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<List<FaceRegistrationManager.RegistrationResult>> holder =
                 new AtomicReference<>(new ArrayList<>());
@@ -887,14 +960,13 @@ public final class SyncCoordinator {
             holder.set(results == null ? new ArrayList<>() : new ArrayList<>(results));
             latch.countDown();
         };
-        if (employees == null) {
-            FaceRegistrationManager.get().validateEmployeesForRebuild(
-                    context,
-                    DatabaseHelper.get(context).getUnregisteredFaces(),
-                    callback
-            );
+        List<Employee> targets = employees == null
+                ? DatabaseHelper.get(context).getUnregisteredFaces()
+                : employees;
+        if (addToRuntimeLibrary) {
+            FaceRegistrationManager.get().registerEmployees(context, targets, callback);
         } else {
-            FaceRegistrationManager.get().validateEmployeesForRebuild(context, employees, callback);
+            FaceRegistrationManager.get().validateEmployeesForRebuild(context, targets, callback);
         }
 
         try {

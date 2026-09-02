@@ -80,13 +80,28 @@ public class SessionManagerTest {
     }
 
     @Test
-    public void screenTimeout_shouldDefaultToKeepOnAndRoundTrip() {
-        assertEquals(ScreenTimeoutPolicy.KEEP_SCREEN_ON,
-                SessionManager.get().getScreenTimeoutMs());
+    public void screenTimeout_shouldDefaultToThirtySeconds() {
+        assertEquals(30_000L, SessionManager.get().getScreenTimeoutMs());
+    }
 
+    @Test
+    public void screenTimeout_shouldRoundTripSupportedValue() {
         assertTrue(SessionManager.get().saveScreenTimeoutMs(120_000L));
 
         assertEquals(120_000L, SessionManager.get().getScreenTimeoutMs());
+    }
+
+    @Test
+    public void unsupportedScreenTimeout_shouldFallbackToThirtySeconds() {
+        assertTrue(SessionManager.get().saveScreenTimeoutMs(45_000L));
+
+        assertEquals(30_000L, SessionManager.get().getScreenTimeoutMs());
+    }
+
+    @Test
+    public void faceSafetyChecks_shouldDefaultToDisabled() {
+        assertFalse(SessionManager.get().isLivenessCheck());
+        assertFalse(SessionManager.get().isMaskDetectEnabled());
     }
 
     @Test

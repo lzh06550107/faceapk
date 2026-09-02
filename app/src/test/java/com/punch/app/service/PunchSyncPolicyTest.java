@@ -26,6 +26,13 @@ public class PunchSyncPolicyTest {
     }
 
     @Test
+    public void transportFailureDoesNotConsumeBusinessRetry() {
+        assertFalse(PunchSyncPolicy.shouldConsumeRetry(-1));
+        assertTrue(PunchSyncPolicy.shouldConsumeRetry(400));
+        assertTrue(PunchSyncPolicy.shouldConsumeRetry(500));
+    }
+
+    @Test
     public void dailyRetryWindowStartsAtLocalMidnight() {
         long afternoonInShanghaiMillis = 1_787_211_000_000L;
 

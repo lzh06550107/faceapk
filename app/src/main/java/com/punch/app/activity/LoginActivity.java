@@ -23,6 +23,7 @@ import com.punch.app.service.SyncService;
 import com.punch.app.service.SyncTrigger;
 import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.KioskManager;
+import com.punch.app.utils.LifecycleRequestGate;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.UpdateManager;
 
@@ -44,10 +45,13 @@ public class LoginActivity extends AppCompatActivity {
     private TextView tvProgressStatus;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final LifecycleRequestGate lifecycleGate = new LifecycleRequestGate();
+    private int activityToken;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        activityToken = lifecycleGate.open();
         setContentView(R.layout.activity_login);
 
         etAccount = findViewById(R.id.et_account);
@@ -75,7 +79,13 @@ public class LoginActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        lifecycleGate.close();
+        executor.shutdownNow();
         super.onDestroy();
+    }
+
+    boolean isLoginExecutorShutdownForTest() {
+        return executor.isShutdown();
     }
 
     @Override
@@ -108,6 +118,7 @@ public class LoginActivity extends AppCompatActivity {
     }
 
     private void doLogin() {
+        final int taskToken = activityToken;
         String account = etAccount.getText().toString().trim();
         String password = etPassword.getText().toString();
         if (TextUtils.isEmpty(account) || TextUtils.isEmpty(password)) {
@@ -128,7 +139,8 @@ public class LoginActivity extends AppCompatActivity {
             if (!SessionManager.get().isDeviceRegistered()) {
                 updateLoadingStatus("\u6b63\u5728\u6ce8\u518c\u8bbe\u5907...");
                 reportStatusEvent("\u6b63\u5728\u6ce8\u518c\u8bbe\u5907...", PunchApplication.STATUS_LEVEL_PROGRESS);
-                ApiResult<DeviceDto.DeviceRegisterData> registerResult = ApiService.registerDevice(this);
+                ApiResult<DeviceDto.DeviceRegisterData> registerResult =
+                        ApiService.registerDevice(getApplicationContext());
                 if (!registerResult.success || registerResult.data == null || registerResult.data.deviceId.isEmpty()) {
                     reportStatusEvent("\u8bbe\u5907\u6ce8\u518c\u5931\u8d25", PunchApplication.STATUS_LEVEL_ERROR);
                     error = registerResult.message != null && !registerResult.message.isEmpty()
@@ -185,7 +197,7 @@ public class LoginActivity extends AppCompatActivity {
             AuthDto.LoginData finalLoginData = loginData;
             DeviceDto.DeviceConfigData finalConfigData = configData;
             String finalError = error;
-            runOnUiThread(() -> {
+            postToActiveActivity(taskToken, () -> {
                 if (finalError != null) {
                     setLoading(false, null);
                     showError(finalError);
@@ -387,10 +399,19 @@ public class LoginActivity extends AppCompatActivity {
     }
 
     private void updateLoadingStatus(String message) {
-        runOnUiThread(() -> {
+        final int taskToken = activityToken;
+        postToActiveActivity(taskToken, () -> {
             if (progress.getVisibility() == View.VISIBLE) {
                 tvProgressStatus.setVisibility(View.VISIBLE);
                 tvProgressStatus.setText(message == null ? "" : message);
+            }
+        });
+    }
+
+    private void postToActiveActivity(int taskToken, Runnable action) {
+        runOnUiThread(() -> {
+            if (lifecycleGate.isActive(taskToken)) {
+                action.run();
             }
         });
     }

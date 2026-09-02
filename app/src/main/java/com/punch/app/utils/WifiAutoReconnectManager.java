@@ -16,11 +16,55 @@ public final class WifiAutoReconnectManager {
     private WifiAutoReconnectManager() {
     }
 
+    public enum AttemptResult {
+        ALREADY_CONNECTED,
+        WIFI_ENABLING,
+        SUBMITTED,
+        NO_SAVED_WIFI,
+        NOT_DEVICE_OWNER,
+        WIFI_SERVICE_UNAVAILABLE,
+        NETWORK_CONFIG_FAILED,
+        PERMISSION_DENIED,
+        FAILED
+    }
+
     public static void ensureSavedWifiConnection(Context context) {
         if (context == null) {
             return;
         }
         ensureSavedWifiConnection(new AndroidDeps(context.getApplicationContext()));
+    }
+
+    public static AttemptResult attemptSavedWifiConnection(Context context) {
+        if (context == null) {
+            return AttemptResult.FAILED;
+        }
+        return attemptSavedWifiConnection(new AndroidDeps(context.getApplicationContext()));
+    }
+
+    public static AttemptResult attemptWifiConnection(Context context,
+                                                       String ssid,
+                                                       String password) {
+        if (context == null) {
+            return AttemptResult.FAILED;
+        }
+        return attemptWifiConnection(
+                new AndroidDeps(context.getApplicationContext()),
+                ssid,
+                password
+        );
+    }
+
+    public static boolean isConnectedToSavedWifi(Context context) {
+        if (context == null) {
+            return false;
+        }
+        Deps deps = new AndroidDeps(context.getApplicationContext());
+        String ssid = deps.getSavedSsid();
+        return ssid != null
+                && !ssid.trim().isEmpty()
+                && deps.hasWifiService()
+                && deps.isConnectedToTargetSsid(ssid);
     }
 
     static void ensureSavedWifiConnection(Deps deps) {
@@ -33,39 +77,56 @@ public final class WifiAutoReconnectManager {
         }
         lastAttemptAt = now;
 
-        String ssid = deps.getSavedSsid();
+        AttemptResult result = attemptSavedWifiConnection(deps);
+        if (result == AttemptResult.ALREADY_CONNECTED) {
+            AppLogger.i(TAG, "Saved wifi already connected: " + deps.getSavedSsid());
+        } else if (result == AttemptResult.SUBMITTED) {
+            AppLogger.i(TAG, "Auto reconnect submitted: ssid=" + deps.getSavedSsid());
+        } else if (result != AttemptResult.WIFI_ENABLING) {
+            AppLogger.w(TAG, "Auto reconnect not submitted: result=" + result.name());
+        }
+    }
+
+    static AttemptResult attemptSavedWifiConnection(Deps deps) {
+        return attemptWifiConnection(deps, deps.getSavedSsid(), deps.getSavedPassword());
+    }
+
+    static AttemptResult attemptWifiConnection(Deps deps, String ssid, String password) {
         if (ssid == null || ssid.trim().isEmpty()) {
-            return;
+            return AttemptResult.NO_SAVED_WIFI;
         }
         if (!deps.isDeviceOwner()) {
-            AppLogger.i(TAG, "Skip auto reconnect because app is not device owner");
-            return;
+            return AttemptResult.NOT_DEVICE_OWNER;
         }
         if (!deps.hasWifiService()) {
-            AppLogger.w(TAG, "Skip auto reconnect because wifi service is unavailable");
-            return;
+            return AttemptResult.WIFI_SERVICE_UNAVAILABLE;
         }
         if (deps.isConnectedToTargetSsid(ssid)) {
-            AppLogger.i(TAG, "Saved wifi already connected: " + ssid);
-            return;
+            return AttemptResult.ALREADY_CONNECTED;
         }
 
-        String password = deps.getSavedPassword();
         try {
-            deps.setWifiEnabled(true);
+            if (!deps.isWifiEnabled()) {
+                return deps.setWifiEnabled(true)
+                        ? AttemptResult.WIFI_ENABLING
+                        : AttemptResult.FAILED;
+            }
             int networkId = deps.addOrFindNetworkId(ssid, password);
             if (networkId < 0) {
-                AppLogger.w(TAG, "Saved wifi network not available for reconnect: " + ssid);
-                return;
+                return AttemptResult.NETWORK_CONFIG_FAILED;
             }
-            deps.disconnect();
             boolean enabled = deps.enableNetwork(networkId, true);
+            if (!enabled) {
+                return AttemptResult.FAILED;
+            }
             deps.reconnect();
-            AppLogger.i(TAG, "Auto reconnect submitted: ssid=" + ssid + ", enabled=" + enabled);
+            return AttemptResult.SUBMITTED;
         } catch (SecurityException e) {
             AppLogger.e(TAG, "Auto reconnect failed because of missing permission", e);
+            return AttemptResult.PERMISSION_DENIED;
         } catch (Exception e) {
             AppLogger.e(TAG, "Auto reconnect failed: " + e.getMessage(), e);
+            return AttemptResult.FAILED;
         }
     }
 
@@ -84,11 +145,15 @@ public final class WifiAutoReconnectManager {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
         }
 
-        int networkId = wifiManager.addNetwork(config);
-        if (networkId >= 0) {
-            return networkId;
+        int existingNetworkId = findConfiguredNetworkId(wifiManager, ssid);
+        if (existingNetworkId >= 0) {
+            config.networkId = existingNetworkId;
+            int updatedNetworkId = wifiManager.updateNetwork(config);
+            return updatedNetworkId >= 0 ? updatedNetworkId : existingNetworkId;
         }
-        return findConfiguredNetworkId(wifiManager, ssid);
+
+        int networkId = wifiManager.addNetwork(config);
+        return networkId >= 0 ? networkId : findConfiguredNetworkId(wifiManager, ssid);
     }
 
     @SuppressWarnings("deprecation")
@@ -153,13 +218,13 @@ public final class WifiAutoReconnectManager {
 
         boolean hasWifiService();
 
+        boolean isWifiEnabled();
+
         boolean isConnectedToTargetSsid(String ssid);
 
-        void setWifiEnabled(boolean enabled);
+        boolean setWifiEnabled(boolean enabled);
 
         int addOrFindNetworkId(String ssid, String password);
-
-        void disconnect();
 
         boolean enableNetwork(int networkId, boolean disableOthers);
 
@@ -203,15 +268,18 @@ public final class WifiAutoReconnectManager {
         }
 
         @Override
+        public boolean isWifiEnabled() {
+            return wifiManager != null && wifiManager.isWifiEnabled();
+        }
+
+        @Override
         public boolean isConnectedToTargetSsid(String ssid) {
             return wifiManager != null && WifiAutoReconnectManager.isConnectedToTargetSsid(wifiManager, ssid);
         }
 
         @Override
-        public void setWifiEnabled(boolean enabled) {
-            if (wifiManager != null) {
-                wifiManager.setWifiEnabled(enabled);
-            }
+        public boolean setWifiEnabled(boolean enabled) {
+            return wifiManager != null && wifiManager.setWifiEnabled(enabled);
         }
 
         @Override
@@ -220,13 +288,6 @@ public final class WifiAutoReconnectManager {
                 return -1;
             }
             return WifiAutoReconnectManager.addOrFindNetworkId(wifiManager, ssid, password);
-        }
-
-        @Override
-        public void disconnect() {
-            if (wifiManager != null) {
-                wifiManager.disconnect();
-            }
         }
 
         @Override

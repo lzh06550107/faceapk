@@ -22,6 +22,10 @@ final class PunchSyncPolicy {
         return responseCode < 0;
     }
 
+    static boolean shouldConsumeRetry(int responseCode) {
+        return responseCode >= 0;
+    }
+
     static long startOfLocalDayEpochSeconds(long nowMillis, TimeZone timeZone) {
         Calendar calendar = Calendar.getInstance(timeZone);
         calendar.setTimeInMillis(nowMillis);

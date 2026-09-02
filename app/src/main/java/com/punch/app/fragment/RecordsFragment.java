@@ -293,25 +293,10 @@ public class RecordsFragment extends Fragment {
 
         String currentLabel = selectedPunchOption != null ? selectedPunchOption.label : null;
         punchOptions.clear();
-        if (!preferOnlineMode) {
-            punchOptions.add(new PunchOption(FREE_PUNCH_OPTION_LABEL, 0, true));
-        }
-
-        int clockIndex = 1;
-        for (String timeRange : SessionManager.get().getCurrentTeamTimeRanges()) {
-            if (timeRange == null) {
-                continue;
-            }
-            String range = timeRange.trim();
-            if (range.isEmpty()) {
-                continue;
-            }
-            punchOptions.add(new PunchOption(range + " \u4e0a\u73ed", clockIndex++));
-            punchOptions.add(new PunchOption(range + " \u4e0b\u73ed", clockIndex++));
-        }
-        if (punchOptions.isEmpty()) {
-            punchOptions.add(new PunchOption(UNSCHEDULED_PUNCH_OPTION_LABEL, 0, false));
-        }
+        punchOptions.addAll(buildPunchOptions(
+                SessionManager.get().getCurrentTeamTimeRanges(),
+                preferOnlineMode
+        ));
 
         List<String> labels = new ArrayList<>(punchOptions.size());
         int selectedIndex = 0;
@@ -330,6 +315,42 @@ public class RecordsFragment extends Fragment {
         spinnerPunchIndex.setSelection(selectedIndex, false);
         suppressSelectionCallback = false;
         selectedPunchOption = punchOptions.get(selectedIndex);
+    }
+
+    static List<PunchOption> buildPunchOptions(List<String> timeRanges,
+                                               boolean onlineMode) {
+        List<PunchOption> options = new ArrayList<>();
+        if (!onlineMode) {
+            options.add(new PunchOption(FREE_PUNCH_OPTION_LABEL, 0, true));
+        }
+
+        int clockIndex = 1;
+        int regularRangeCount = 0;
+        if (timeRanges != null) {
+            for (String timeRange : timeRanges) {
+                if (timeRange == null) {
+                    continue;
+                }
+                String range = timeRange.trim();
+                if (range.isEmpty()) {
+                    continue;
+                }
+                if (onlineMode && regularRangeCount >= 3) {
+                    break;
+                }
+                options.add(new PunchOption(range + " \u4e0a\u73ed", clockIndex++));
+                options.add(new PunchOption(range + " \u4e0b\u73ed", clockIndex++));
+                regularRangeCount++;
+            }
+        }
+        if (onlineMode) {
+            options.add(new PunchOption("\u52a0\u73ed\u4e0a\u73ed", 7));
+            options.add(new PunchOption("\u52a0\u73ed\u4e0b\u73ed", 8));
+        }
+        if (options.isEmpty()) {
+            options.add(new PunchOption(UNSCHEDULED_PUNCH_OPTION_LABEL, 0, false));
+        }
+        return options;
     }
 
     private void rebuildStatusOptions() {
@@ -586,7 +607,7 @@ public class RecordsFragment extends Fragment {
         super.onDestroy();
     }
 
-    private static final class PunchOption {
+    static final class PunchOption {
         final String label;
         final int clockIndex;
         final boolean freePunch;

@@ -2,7 +2,7 @@ package com.punch.app.utils;
 
 public final class ScreenTimeoutPolicy {
     public static final long KEEP_SCREEN_ON = 0L;
-    public static final long DEFAULT_TIMEOUT_MS = KEEP_SCREEN_ON;
+    public static final long DEFAULT_TIMEOUT_MS = 30_000L;
 
     private static final long[] SUPPORTED_TIMEOUTS_MS = {
             KEEP_SCREEN_ON,

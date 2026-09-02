@@ -15,6 +15,7 @@ import com.baidu.idl.main.facesdk.model.BDFaceImageInstance;
 import com.baidu.idl.main.facesdk.model.BDFaceSDKCommon;
 import com.baidu.idl.main.facesdk.model.BDFaceSDKConfig;
 import com.baidu.idl.main.facesdk.model.Feature;
+import com.punch.app.R;
 import com.punch.app.db.DatabaseHelper;
 import com.punch.app.model.Employee;
 import com.punch.app.utils.AppLogger;
@@ -32,6 +33,7 @@ public class FaceManager {
     private static final float MASK_SCORE_THRESHOLD = 0.5f;
     private static final float SAFE_MATCH_THRESHOLD_FLOOR = 0.75f;
     private static final float SAFE_MATCH_SCORE_GAP = 0.03f;
+    public static final int FEATURE_CACHE_SCHEMA_VERSION = 1;
     public static final String ERROR_INVALID_FACE_IMAGE = "\u4eba\u8138\u56fe\u7247\u4e0d\u5408\u683c";
     public static final String ERROR_NO_FACE_DETECTED = "\u672a\u68c0\u6d4b\u5230\u4eba\u8138";
     public static final String ERROR_LIVENESS_MODEL_NOT_READY = "\u6d3b\u4f53\u68c0\u6d4b\u6a21\u578b\u672a\u5c31\u7eea";
@@ -42,6 +44,7 @@ public class FaceManager {
     public static final String ERROR_NO_MATCHING_FACE = "\u672a\u627e\u5230\u5339\u914d\u4eba\u5458";
     public static final String ERROR_MATCH_AMBIGUOUS = "\u8bc6\u522b\u7ed3\u679c\u4e0d\u591f\u660e\u786e\uff0c\u8bf7\u91cd\u8bd5";
     public static final String ERROR_FACE_ID_MAPPING_MISSING = "\u4eba\u8138\u7d22\u5f15\u6620\u5c04\u4e22\u5931";
+    public static final String ERROR_FACE_SEARCH_WRITE_FAILED = "\u4eba\u8138\u5e93\u66f4\u65b0\u5931\u8d25";
 
     private static FaceManager instance;
 
@@ -59,11 +62,12 @@ public class FaceManager {
     private final Map<Integer, String> intToEmpId = new HashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object faceLibraryLock = new Object();
+    private final FaceSdkOperationGuard sdkOperationGuard = FaceSdkOperationGuard.shared();
+    private final FaceLibraryRuntimeState runtimeState = new FaceLibraryRuntimeState();
     private volatile int loadedFaceCount;
 
     public void init(Context context, String licenseFileName, final InitCallback callback) {
         appContext = context.getApplicationContext();
-
         FaceSDKManager.getInstance().initModel(appContext, buildSdkConfig(), new SdkInitListener() {
             @Override
             public void initStart() {
@@ -101,16 +105,39 @@ public class FaceManager {
         if (!initialized) {
             return;
         }
-        if (FaceSDKManager.getInstance().getFaceDetectPerson() != null) {
-            FaceSDKManager.getInstance().getFaceDetectPerson().loadConfig(buildSdkConfig());
-        }
+        withSdkOperation("refresh-runtime-config", () -> {
+            if (FaceSDKManager.getInstance().getFaceDetectPerson() != null) {
+                FaceSDKManager.getInstance().getFaceDetectPerson().loadConfig(buildSdkConfig());
+            }
+            return null;
+        });
     }
 
     public void rebuildFaceLibrary(Context context) {
         executor.execute(() -> rebuildFaceLibrarySync(context));
     }
 
+    public boolean canReuseRuntimeFaceLibrary(Context context) {
+        if (!initialized || loadedFaceCount <= 0) {
+            return false;
+        }
+        Context targetContext = context == null ? appContext : context.getApplicationContext();
+        if (targetContext == null) {
+            return false;
+        }
+        List<Employee> employees = DatabaseHelper.get(targetContext).getAllActiveEmployees();
+        return runtimeState.canReuse(
+                buildRuntimeLibraryScope(),
+                FaceLibraryRuntimeState.fingerprint(employees)
+        );
+    }
+
     public boolean rebuildFaceLibrarySync(Context context) {
+        return withSdkOperation("rebuild-face-library",
+                () -> rebuildFaceLibrarySyncExclusive(context));
+    }
+
+    private boolean rebuildFaceLibrarySyncExclusive(Context context) {
         if (!initialized) {
             loadedFaceCount = 0;
             return false;
@@ -124,11 +151,39 @@ public class FaceManager {
 
         DatabaseHelper db = DatabaseHelper.get(context);
         List<Employee> employees = db.getAllActiveEmployees();
+        AppLogger.i(TAG, "Face rebuild begin: employees=" + employees.size()
+                + " thread=" + Thread.currentThread().getName());
         List<FaceLibraryEntry> entries = new ArrayList<>();
+        int featureCacheHits = 0;
+        int featureExtractions = 0;
         for (Employee emp : employees) {
             if (emp.faceRegistered == 1 && emp.localFaceId != null && emp.faceImageUrl != null) {
                 String imagePath = FaceFileManager.getFaceImagePath(context, emp.id);
-                byte[] feature = extractFeatureFromFile(imagePath, emp.id);
+                AppLogger.i(TAG, "Face rebuild employee begin: empId=" + safeEmpId(emp.id));
+                byte[] feature = db.getReusableFaceFeature(
+                        emp.id,
+                        emp.faceVersion,
+                        emp.faceImageSha256,
+                        FEATURE_CACHE_SCHEMA_VERSION
+                );
+                boolean cacheHit = feature != null;
+                if (cacheHit) {
+                    featureCacheHits++;
+                } else {
+                    featureExtractions++;
+                    feature = extractFeatureFromFile(imagePath, emp.id);
+                    if (feature != null) {
+                        db.saveFaceFeature(
+                                emp.id,
+                                emp.faceVersion,
+                                emp.faceImageSha256,
+                                FEATURE_CACHE_SCHEMA_VERSION,
+                                feature
+                        );
+                    }
+                }
+                AppLogger.i(TAG, "Face rebuild employee end: empId=" + safeEmpId(emp.id)
+                        + " feature=" + (feature == null ? "invalid" : (cacheHit ? "cache" : "extracted")));
                 if (feature != null) {
                     try {
                         entries.add(new FaceLibraryEntry(
@@ -143,33 +198,94 @@ public class FaceManager {
             }
         }
 
+        int loadedCount = 0;
         synchronized (faceLibraryLock) {
-            faceSearch.featureClear();
+            AppLogger.i(TAG, "Face rebuild featureClear begin: candidates=" + entries.size());
+            int clearCode = faceSearch.featureClear();
+            AppLogger.i(TAG, "Face rebuild featureClear end: code=" + clearCode);
             empToIntId.clear();
             intToEmpId.clear();
             for (FaceLibraryEntry entry : entries) {
-                faceSearch.pushPersonById(entry.sdkId, entry.feature);
+                AppLogger.i(TAG, "Face rebuild push begin: empId=" + safeEmpId(entry.empId)
+                        + " sdkId=" + entry.sdkId);
+                int pushCode = faceSearch.pushPersonById(entry.sdkId, entry.feature);
+                AppLogger.i(TAG, "Face rebuild push end: empId=" + safeEmpId(entry.empId)
+                        + " sdkId=" + entry.sdkId + " code=" + pushCode);
+                if (pushCode != 0) {
+                    AppLogger.e(TAG, "Face rebuild push failed: empId=" + safeEmpId(entry.empId)
+                            + " sdkId=" + entry.sdkId + " code=" + pushCode);
+                    continue;
+                }
                 empToIntId.put(entry.empId, entry.sdkId);
                 intToEmpId.put(entry.sdkId, entry.empId);
+                loadedCount++;
             }
-            loadedFaceCount = entries.size();
-            Log.i(TAG, "rebuildFaceLibrary: " + entries.size() + " faces loaded");
+            loadedFaceCount = loadedCount;
+            Log.i(TAG, "rebuildFaceLibrary: " + loadedCount + " faces loaded");
         }
+        updateRuntimeLibraryState(employees, loadedCount, entries.size());
+        AppLogger.i(TAG, "Face rebuild end: loaded=" + loadedCount
+                + " candidates=" + employees.size()
+                + " cacheHits=" + featureCacheHits
+                + " extracted=" + featureExtractions);
         return true;
     }
 
     public RegisterResult registerFace(Context context, String empId, String imageFilePath) {
-        return registerFaceInternal(context, empId, imageFilePath, true);
+        return withSdkOperation("register-face:" + safeEmpId(empId),
+                () -> registerFaceInternal(
+                        context, empId, imageFilePath, true, 0, "", false));
+    }
+
+    public RegisterResult registerFace(Context context, Employee employee, String imageFilePath) {
+        if (employee == null) {
+            return RegisterResult.fail(ERROR_INVALID_FACE_IMAGE);
+        }
+        return registerFace(
+                context, employee.id, imageFilePath, employee.faceVersion, employee.faceImageSha256);
+    }
+
+    public RegisterResult registerFace(Context context,
+                                       String empId,
+                                       String imageFilePath,
+                                       int faceVersion,
+                                       String imageSha256) {
+        return withSdkOperation("register-face:" + safeEmpId(empId),
+                () -> registerFaceInternal(
+                        context, empId, imageFilePath, true, faceVersion, imageSha256, true));
     }
 
     public RegisterResult validateFaceImage(Context context, String empId, String imageFilePath) {
-        return registerFaceInternal(context, empId, imageFilePath, false);
+        return withSdkOperation("validate-face:" + safeEmpId(empId),
+                () -> registerFaceInternal(
+                        context, empId, imageFilePath, false, 0, "", false));
+    }
+
+    public RegisterResult validateFaceImage(Context context, Employee employee, String imageFilePath) {
+        if (employee == null) {
+            return RegisterResult.fail(ERROR_INVALID_FACE_IMAGE);
+        }
+        return validateFaceImage(
+                context, employee.id, imageFilePath, employee.faceVersion, employee.faceImageSha256);
+    }
+
+    public RegisterResult validateFaceImage(Context context,
+                                            String empId,
+                                            String imageFilePath,
+                                            int faceVersion,
+                                            String imageSha256) {
+        return withSdkOperation("validate-face:" + safeEmpId(empId),
+                () -> registerFaceInternal(
+                        context, empId, imageFilePath, false, faceVersion, imageSha256, true));
     }
 
     private RegisterResult registerFaceInternal(Context context,
                                                   String empId,
                                                   String imageFilePath,
-                                                  boolean addToRuntimeLibrary) {
+                                                  boolean addToRuntimeLibrary,
+                                                  int faceVersion,
+                                                  String imageSha256,
+                                                  boolean persistFeature) {
         if (!initialized) {
             return RegisterResult.fail(ERROR_FACE_SDK_NOT_READY);
         }
@@ -184,23 +300,52 @@ public class FaceManager {
             return RegisterResult.fail(ERROR_INVALID_FACE_IMAGE);
         }
 
+        DatabaseHelper db = DatabaseHelper.get(context);
+        if (persistFeature) {
+            db.saveFaceFeature(
+                    empId,
+                    faceVersion,
+                    imageSha256,
+                    FEATURE_CACHE_SCHEMA_VERSION,
+                    feature
+            );
+        }
+
         if (addToRuntimeLibrary) {
-            final int intId;
+                final int intId;
             try {
-                intId = DatabaseHelper.get(context).getOrCreateFaceSdkId(empId);
+                intId = db.getOrCreateFaceSdkId(empId);
             } catch (RuntimeException e) {
                 AppLogger.e(TAG, "Face SDK ID allocation failed: empId="
                         + safeEmpId(empId) + " error=" + e.getMessage());
                 return RegisterResult.fail(ERROR_FACE_ID_MAPPING_MISSING);
             }
             synchronized (faceLibraryLock) {
-                faceSearch.pushPersonById(intId, feature);
+                boolean wasLoaded = empToIntId.containsKey(empId);
+                if (wasLoaded) {
+                    faceSearch.delPersonById(intId);
+                }
+                int pushCode = faceSearch.pushPersonById(intId, feature);
+                if (pushCode != 0) {
+                    empToIntId.remove(empId);
+                    intToEmpId.remove(intId);
+                    if (wasLoaded && loadedFaceCount > 0) {
+                        loadedFaceCount--;
+                    }
+                    AppLogger.e(TAG, "Face register push failed: empId=" + safeEmpId(empId)
+                            + " intId=" + intId + " code=" + pushCode);
+                    return RegisterResult.fail(ERROR_FACE_SEARCH_WRITE_FAILED);
+                }
                 empToIntId.put(empId, intId);
                 intToEmpId.put(intId, empId);
+                if (!wasLoaded) {
+                    loadedFaceCount++;
+                }
+                runtimeState.invalidate();
                 AppLogger.i(TAG, "Face registered: empId=" + empId + " intId=" + intId);
             }
         } else {
-            AppLogger.i(TAG, "Face image validated: empId=" + empId);
+            AppLogger.i(TAG, "Face image validated and cached: empId=" + empId);
         }
 
         String localFaceId = "FACE_" + empId;
@@ -208,19 +353,38 @@ public class FaceManager {
     }
 
     public void removeFace(String empId) {
+        withSdkOperation("remove-face:" + safeEmpId(empId), () -> {
+            removeFaceExclusive(empId);
+            return null;
+        });
+    }
+
+    private void removeFaceExclusive(String empId) {
         synchronized (faceLibraryLock) {
             Integer intId = empToIntId.remove(empId);
             if (intId != null) {
                 intToEmpId.remove(intId);
                 FaceSearch faceSearch = FaceSDKManager.getInstance().getFaceSearch();
                 if (faceSearch != null) {
-                    faceSearch.delPersonById(intId);
+                    int deleteCode = faceSearch.delPersonById(intId);
+                    if (deleteCode != 0) {
+                        AppLogger.w(TAG, "Face remove failed: empId=" + safeEmpId(empId)
+                                + " intId=" + intId + " code=" + deleteCode);
+                    }
                 }
+                if (loadedFaceCount > 0) {
+                    loadedFaceCount--;
+                }
+                runtimeState.invalidate();
             }
         }
     }
 
     public RecognizeResult recognizeFromBitmap(Bitmap bmp) {
+        return withSdkOperation("recognize-bitmap", () -> recognizeFromBitmapExclusive(bmp));
+    }
+
+    private RecognizeResult recognizeFromBitmapExclusive(Bitmap bmp) {
         if (!initialized) {
             return RecognizeResult.fail(ERROR_FACE_SDK_NOT_READY);
         }
@@ -255,6 +419,11 @@ public class FaceManager {
     }
 
     public RecognizeResult recognizeFromNv21(byte[] nv21, int width, int height, int angle, int mirror) {
+        return withSdkOperation("recognize-nv21",
+                () -> recognizeFromNv21Exclusive(nv21, width, height, angle, mirror));
+    }
+
+    private RecognizeResult recognizeFromNv21Exclusive(byte[] nv21, int width, int height, int angle, int mirror) {
         if (!initialized) {
             return RecognizeResult.fail(ERROR_FACE_SDK_NOT_READY);
         }
@@ -300,6 +469,10 @@ public class FaceManager {
     }
 
     private RecognizeResult runPreChecks(BDFaceImageInstance inst, FaceInfo faceInfo) {
+        if (appContext != null
+                && appContext.getResources().getBoolean(R.bool.face_punch_stress_bypass_prechecks)) {
+            return null;
+        }
         SessionManager session = SessionManager.get();
 
         if (session.isLivenessCheck()) {
@@ -444,9 +617,13 @@ public class FaceManager {
         BDFaceImageInstance inst = new BDFaceImageInstance(bmp);
         bmp.recycle();
         try {
+            AppLogger.i(TAG, "Face file detect begin: empId=" + safeEmpId(empId)
+                    + " thread=" + Thread.currentThread().getName());
             FaceInfo[] faceInfos = FaceSDKManager.getInstance()
                     .getFaceDetectPerson()
                     .detect(BDFaceSDKCommon.DetectType.DETECT_VIS, inst);
+            AppLogger.i(TAG, "Face file detect end: empId=" + safeEmpId(empId)
+                    + " faces=" + (faceInfos == null ? -1 : faceInfos.length));
             if (faceInfos == null || faceInfos.length == 0) {
                 AppLogger.w(TAG, "No face detected in registered image: empId=" + safeEmpId(empId)
                         + " path=" + imagePath);
@@ -454,9 +631,12 @@ public class FaceManager {
             }
 
             byte[] feature = new byte[512];
+            AppLogger.i(TAG, "Face file feature begin: empId=" + safeEmpId(empId));
             float size = FaceSDKManager.getInstance().getFacePersonFeature()
                     .feature(BDFaceSDKCommon.FeatureType.BDFACE_FEATURE_TYPE_LIVE_PHOTO,
                             inst, faceInfos[0].landmarks, feature);
+            AppLogger.i(TAG, "Face file feature end: empId=" + safeEmpId(empId)
+                    + " size=" + size);
             if (size <= 0) {
                 AppLogger.w(TAG, "Face feature extraction failed: empId=" + safeEmpId(empId)
                         + " path=" + imagePath);
@@ -466,6 +646,24 @@ public class FaceManager {
         } finally {
             inst.destory();
         }
+    }
+
+    private <T> T withSdkOperation(String operation, FaceSdkOperationGuard.Operation<T> action) {
+        long queuedAtNanos = System.nanoTime();
+        return sdkOperationGuard.call(() -> {
+            long startedAtNanos = System.nanoTime();
+            long waitMs = (startedAtNanos - queuedAtNanos) / 1_000_000L;
+            String threadName = Thread.currentThread().getName();
+            AppLogger.i(TAG, "Face SDK op begin: op=" + operation
+                    + " thread=" + threadName + " waitMs=" + waitMs);
+            try {
+                return action.run();
+            } finally {
+                long elapsedMs = (System.nanoTime() - startedAtNanos) / 1_000_000L;
+                AppLogger.i(TAG, "Face SDK op end: op=" + operation
+                        + " thread=" + threadName + " elapsedMs=" + elapsedMs);
+            }
+        });
     }
 
     private String safeEmpId(String empId) {
@@ -478,6 +676,24 @@ public class FaceManager {
 
     public int getLoadedFaceCount() {
         return loadedFaceCount;
+    }
+
+    private void updateRuntimeLibraryState(List<Employee> employees, int loadedCount, int candidateCount) {
+        if (loadedCount > 0 && loadedCount == candidateCount) {
+            runtimeState.markReady(
+                    buildRuntimeLibraryScope(),
+                    FaceLibraryRuntimeState.fingerprint(employees)
+            );
+            return;
+        }
+        runtimeState.invalidate();
+    }
+
+    private String buildRuntimeLibraryScope() {
+        SessionManager session = SessionManager.get();
+        return session.getBaseUrl()
+                + "|company=" + session.getCompanyId()
+                + "|device=" + session.getDeviceId();
     }
 
     private static final class FaceLibraryEntry {

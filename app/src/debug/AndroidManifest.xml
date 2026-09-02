@@ -20,6 +20,20 @@
             android:taskAffinity="com.punch.app.uitest"
             android:theme="@style/AppTheme" />
         <activity
+            android:name=".activity.UiTestKioskHomeHostActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.punch.app.uitest.kiosk_home"
+            android:theme="@style/KioskHomeTheme" />
+        <activity
+            android:name=".activity.UiTestRecordsHostActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.punch.app.uitest.records"
+            android:theme="@style/AppTheme" />
+        <activity
             android:name=".activity.UiTestSetupWizardHostActivity"
             android:exported="true"
             android:excludeFromRecents="true"

@@ -11,6 +11,7 @@ import com.punch.app.activation.ActivationManager;
 import com.punch.app.activity.KioskHomeActivity;
 import com.punch.app.db.DatabaseHelper;
 import com.punch.app.face.FaceManager;
+import com.punch.app.face.PunchPreparationPolicy;
 import com.punch.app.network.InteractionLogStore;
 import com.punch.app.service.HeartbeatManager;
 import com.punch.app.service.SyncCoordinator;
@@ -18,6 +19,7 @@ import com.punch.app.utils.AppLogger;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
 import com.punch.app.utils.UpdateManager;
+import com.punch.app.utils.WifiReconnectCoordinator;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -31,7 +33,7 @@ public class PunchApplication extends Application {
     private static final String TAG = "PunchApplication";
     private static final long FACE_SDK_READY_TIMEOUT_MS = 120_000L;
     private static final long KIOSK_RESTORE_DELAY_MS = 250L;
-    private static final long KIOSK_FOREGROUND_WATCHDOG_INTERVAL_MS = 150L;
+    private static final long KIOSK_FOREGROUND_WATCHDOG_INTERVAL_MS = 1_000L;
     private static final int MAX_STATUS_HISTORY = 5;
 
     public static final int STATUS_LEVEL_INFO = 0;
@@ -80,6 +82,10 @@ public class PunchApplication extends Application {
             SessionManager.get().init(this);
             return;
         }
+        if (KioskManager.isDeviceTestMaintenanceModeForTest()) {
+            SessionManager.get().init(this);
+            return;
+        }
 
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
             @Override
@@ -95,6 +101,7 @@ public class PunchApplication extends Application {
                 if (activity instanceof KioskHomeActivity) {
                     return;
                 }
+                KioskManager.cancelPendingAppTaskRestore();
                 KioskManager.enterIfPossible(activity);
                 startKioskForegroundWatchdog();
                 resumedNonHomeActivityCount += 1;
@@ -109,7 +116,7 @@ public class PunchApplication extends Application {
                 }
                 resumedNonHomeActivityCount = Math.max(0, resumedNonHomeActivityCount - 1);
                 lastNonHomeActivityVisibleAt = System.currentTimeMillis();
-                scheduleKioskTaskRestore();
+                scheduleKioskTaskRestore(activity);
             }
 
             @Override
@@ -131,6 +138,7 @@ public class PunchApplication extends Application {
             KioskManager.ensureOwnerKioskPolicies(this);
             startKioskForegroundWatchdog();
         }
+        WifiReconnectCoordinator.get(this).start();
         InteractionLogStore.init(this); // 日志在应用启动就初始化
         DatabaseHelper.get(this);
         ActivationManager.get().ensureDeviceRegistered(this);
@@ -155,9 +163,16 @@ public class PunchApplication extends Application {
         return lastNonHomeActivityClass;
     }
 
-    private void scheduleKioskTaskRestore() {
+    private void scheduleKioskTaskRestore(Activity activity) {
+        if (activity == null || !KioskManager.shouldRestoreAppTask(
+                this,
+                activity.isChangingConfigurations(),
+                resumedNonHomeActivityCount
+        )) {
+            return;
+        }
         mainHandler.postDelayed(() -> {
-            if (!SessionManager.get().isKioskEnabled() || resumedNonHomeActivityCount > 0) {
+            if (!KioskManager.shouldRestoreAppTask(this, false, resumedNonHomeActivityCount)) {
                 return;
             }
             KioskManager.bringExistingAppTaskToFront(this, -1);
@@ -175,11 +190,17 @@ public class PunchApplication extends Application {
     private final Runnable kioskForegroundWatchdogRunnable = new Runnable() {
         @Override
         public void run() {
-            if (!SessionManager.get().isKioskEnabled() || !KioskManager.isDeviceOwner(PunchApplication.this)) {
+            if (KioskManager.isDeviceTestMaintenanceModeForTest()
+                    || !SessionManager.get().isKioskEnabled()
+                    || !KioskManager.isDeviceOwner(PunchApplication.this)) {
                 kioskForegroundWatchdogRunning = false;
                 return;
             }
-            if (resumedNonHomeActivityCount <= 0) {
+            if (KioskManager.shouldRestoreAppTask(
+                    PunchApplication.this,
+                    false,
+                    resumedNonHomeActivityCount
+            )) {
                 KioskManager.bringExistingAppTaskToFrontQuietly(PunchApplication.this, -1);
             }
             mainHandler.postDelayed(this, KIOSK_FOREGROUND_WATCHDOG_INTERVAL_MS);
@@ -348,17 +369,26 @@ public class PunchApplication extends Application {
             return;
         }
 
-        if (DatabaseHelper.get(this).getActiveEmployeeCount() <= 0) {
+        int activeEmployeeCount = DatabaseHelper.get(this).getActiveEmployeeCount();
+        PunchPreparationPolicy.Action preparationAction = PunchPreparationPolicy.decide(
+                activeEmployeeCount,
+                FaceManager.get().canReuseRuntimeFaceLibrary(this)
+        );
+        if (preparationAction == PunchPreparationPolicy.Action.SYNC_EMPLOYEES) {
             if (!SyncCoordinator.get().syncEmployeesForPreparation(this)) {
                 markPunchRecognitionFailed("员工同步失败，等待重试");
-                return;
             }
-        } else {
-            beginPunchDataPreparation("正在重建人脸库...");
-            if (!SyncCoordinator.get().rebuildLocalFaceLibrary(this)) {
-                markPunchRecognitionFailed("人脸库重建失败，请稍后重试");
-                return;
-            }
+            return;
+        }
+        if (preparationAction == PunchPreparationPolicy.Action.REUSE_FACE_LIBRARY) {
+            markPunchRecognitionReady("人脸库已就绪");
+            AppLogger.i(TAG, "Reuse existing runtime face library after login");
+            return;
+        }
+
+        beginPunchDataPreparation("正在重建人脸库...");
+        if (!SyncCoordinator.get().rebuildLocalFaceLibrary(this)) {
+            markPunchRecognitionFailed("人脸库重建失败，请稍后重试");
         }
     }
 

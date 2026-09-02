@@ -7,7 +7,7 @@ import android.os.Bundle;
 import com.punch.app.PunchApplication;
 import com.punch.app.utils.KioskManager;
 import com.punch.app.utils.SessionManager;
-import com.punch.app.utils.WifiAutoReconnectManager;
+import com.punch.app.utils.WifiReconnectCoordinator;
 
 public class KioskHomeActivity extends Activity {
     public static final String EXTRA_FORCE_FRESH_TARGET = "force_fresh_target";
@@ -20,7 +20,7 @@ public class KioskHomeActivity extends Activity {
         if (PunchApplication.isUiTestModeEnabled()) {
             return;
         }
-        WifiAutoReconnectManager.ensureSavedWifiConnection(this);
+        WifiReconnectCoordinator.get(this).requestReconnect("kiosk_home");
 
         PunchApplication app = PunchApplication.get();
         boolean forceFreshTarget = getIntent().getBooleanExtra(
@@ -43,11 +43,11 @@ public class KioskHomeActivity extends Activity {
         }
 
         if (!isTaskRoot()) {
-            launchFreshTarget(resolveDefaultActivityClass(), forceFreshTarget);
+            launchFreshTarget(resolveDefaultActivityClass());
             return;
         }
 
-        launchFreshTarget(resolveDefaultActivityClass(), forceFreshTarget);
+        launchFreshTarget(resolveDefaultActivityClass());
     }
 
     private Class<?> resolveRecentActivityClass(PunchApplication app) {
@@ -66,25 +66,19 @@ public class KioskHomeActivity extends Activity {
         Intent intent = new Intent(this, activityClass);
         intent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_SINGLE_TOP
         );
         startActivity(intent);
-        finishHomeTask();
         overridePendingTransition(0, 0);
     }
 
-    private void launchFreshTarget(Class<?> activityClass, boolean preserveExistingTask) {
+    private void launchFreshTarget(Class<?> activityClass) {
         Intent intent = new Intent(this, activityClass);
         intent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_SINGLE_TOP
         );
-        if (!preserveExistingTask) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        }
         startActivity(intent);
-        finishHomeTask();
         overridePendingTransition(0, 0);
     }
 

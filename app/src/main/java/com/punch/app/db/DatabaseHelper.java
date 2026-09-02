@@ -6,6 +6,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
+import com.punch.app.face.FaceFeatureCachePolicy;
 import com.punch.app.model.Employee;
 import com.punch.app.model.PunchRecord;
 import com.punch.app.model.SyncQueueItem;
@@ -21,6 +22,7 @@ import java.util.Map;
 public class DatabaseHelper extends SQLiteOpenHelper {
 
     private static DatabaseHelper instance;
+    private static String databaseNameOverrideForTest;
     private final Context appContext;
     private final FaceSdkIdRegistry faceSdkIdRegistry;
 
@@ -30,9 +32,30 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return instance;
     }
 
+    static synchronized void setDatabaseNameForTest(String databaseName) {
+        if (instance != null) {
+            instance.close();
+            instance = null;
+        }
+        databaseNameOverrideForTest = databaseName;
+    }
+
+    static synchronized void resetForTest() {
+        if (instance != null) {
+            instance.close();
+            instance = null;
+        }
+        databaseNameOverrideForTest = null;
+    }
+
+    private static synchronized String resolveDatabaseName() {
+        return databaseNameOverrideForTest == null || databaseNameOverrideForTest.trim().isEmpty()
+                ? Constants.DB_NAME
+                : databaseNameOverrideForTest.trim();
+    }
 
     private DatabaseHelper(Context context) {
-        super(context, Constants.DB_NAME, null, Constants.DB_VERSION);
+        super(context, resolveDatabaseName(), null, Constants.DB_VERSION);
         this.appContext = context.getApplicationContext();
         this.faceSdkIdRegistry = new FaceSdkIdRegistry(new FaceSdkIdRegistry.Store() {
             @Override
@@ -79,6 +102,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         // 常用索引：优化按线体、打卡日期、同步状态等场景的查询性能。
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_emp_line ON employees(assigned_line_code)");
         createFaceSdkIdsTable(db);
+        createFaceFeaturesTable(db);
         createPunchRecordIndexes(db);
     }
 
@@ -107,6 +131,9 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         }
         if (oldVersion < 9) {
             createFaceSdkIdsTable(db);
+        }
+        if (oldVersion < 10) {
+            createFaceFeaturesTable(db);
         }
     }
 
@@ -146,6 +173,77 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     private void createFaceSdkIdsTable(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS face_sdk_ids (" +
                 "emp_id TEXT PRIMARY KEY, sdk_id INTEGER NOT NULL UNIQUE CHECK(sdk_id > 0))");
+    }
+
+    private void createFaceFeaturesTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS face_features (" +
+                "emp_id TEXT PRIMARY KEY, " +
+                "face_version INTEGER NOT NULL DEFAULT 0, " +
+                "image_sha256 TEXT NOT NULL DEFAULT '', " +
+                "feature_schema_version INTEGER NOT NULL, " +
+                "feature BLOB NOT NULL, " +
+                "updated_at INTEGER NOT NULL)");
+    }
+
+    public void saveFaceFeature(String empId,
+                                int faceVersion,
+                                String imageSha256,
+                                int featureSchemaVersion,
+                                byte[] feature) {
+        if (empId == null || empId.trim().isEmpty()
+                || feature == null
+                || feature.length != FaceFeatureCachePolicy.FEATURE_LENGTH) {
+            return;
+        }
+        ContentValues values = new ContentValues();
+        values.put("emp_id", empId.trim());
+        values.put("face_version", faceVersion);
+        values.put("image_sha256", imageSha256 == null ? "" : imageSha256.trim());
+        values.put("feature_schema_version", featureSchemaVersion);
+        values.put("feature", feature);
+        values.put("updated_at", System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict(
+                "face_features", null, values, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    public byte[] getReusableFaceFeature(String empId,
+                                         int faceVersion,
+                                         String imageSha256,
+                                         int featureSchemaVersion) {
+        if (empId == null || empId.trim().isEmpty()) {
+            return null;
+        }
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT face_version, image_sha256, feature_schema_version, feature " +
+                        "FROM face_features WHERE emp_id=?",
+                new String[]{empId.trim()});
+        try {
+            if (!c.moveToFirst()) {
+                return null;
+            }
+            int cachedFaceVersion = c.getInt(0);
+            String cachedSha = c.getString(1);
+            int cachedSchemaVersion = c.getInt(2);
+            byte[] feature = c.getBlob(3);
+            return FaceFeatureCachePolicy.isReusable(
+                    cachedFaceVersion, cachedSha,
+                    faceVersion, imageSha256,
+                    cachedSchemaVersion, featureSchemaVersion,
+                    feature) ? feature : null;
+        } finally {
+            c.close();
+        }
+    }
+
+    public void deleteFaceFeature(String empId) {
+        if (empId == null || empId.trim().isEmpty()) {
+            return;
+        }
+        getWritableDatabase().delete("face_features", "emp_id=?", new String[]{empId.trim()});
+    }
+
+    public void clearFaceFeatures() {
+        getWritableDatabase().delete("face_features", null, null);
     }
 
 
@@ -293,16 +391,19 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             v.put("updated_at", updatedAt);
         }
         getWritableDatabase().update("employees", v, "id=?", new String[]{id});
+        deleteFaceFeature(id);
     }
 
     public void removeEmployee(String id) {
         if (id == null || id.trim().isEmpty()) {
             return;
         }
+        deleteFaceFeature(id);
         getWritableDatabase().delete("employees", "id=?", new String[]{id});
     }
 
     public void clearAllEmployees() {
+        clearFaceFeatures();
         getWritableDatabase().delete("employees", null, null);
     }
 
@@ -781,4 +882,30 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             c.close();
         }
     }
+
+    public int countPunchRecordsByClientPrefix(String prefix) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM punch_records WHERE client_record_id LIKE ?",
+                new String[]{prefix + "%"});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; }
+        finally { c.close(); }
+    }
+
+    public int countSyncQueueByAction(String action) {
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM sync_queue WHERE action=?",
+                new String[]{action});
+        try { return c.moveToFirst() ? c.getInt(0) : 0; }
+        finally { c.close(); }
+    }
+
+    public int deleteSyncQueueByAction(String action) {
+        return getWritableDatabase().delete("sync_queue", "action=?", new String[]{action});
+    }
+
+    public int deletePunchRecordsByClientPrefix(String prefix) {
+        return getWritableDatabase().delete(
+                "punch_records", "client_record_id LIKE ?", new String[]{prefix + "%"});
+    }
+
 }
