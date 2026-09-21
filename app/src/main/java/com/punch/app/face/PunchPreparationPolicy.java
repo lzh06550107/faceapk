@@ -18,4 +18,16 @@ public final class PunchPreparationPolicy {
                 ? Action.REUSE_FACE_LIBRARY
                 : Action.REBUILD_FACE_LIBRARY;
     }
+
+    public static boolean shouldStartRetry(long lastAttemptAtMs,
+                                           long nowMs,
+                                           long retryDelayMs) {
+        if (lastAttemptAtMs <= 0L || retryDelayMs <= 0L) {
+            return true;
+        }
+        if (nowMs < lastAttemptAtMs) {
+            return true;
+        }
+        return nowMs - lastAttemptAtMs >= retryDelayMs;
+    }
 }

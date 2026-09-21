@@ -55,7 +55,7 @@ public class FaceManager {
         return instance;
     }
 
-    private boolean initialized = false;
+    private volatile boolean initialized = false;
     private Context appContext;
 
     private final Map<String, Integer> empToIntId = new HashMap<>();

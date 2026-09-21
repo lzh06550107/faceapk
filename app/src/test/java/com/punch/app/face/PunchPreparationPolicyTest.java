@@ -25,4 +25,24 @@ public class PunchPreparationPolicyTest {
                 PunchPreparationPolicy.Action.REBUILD_FACE_LIBRARY,
                 PunchPreparationPolicy.decide(20, false));
     }
+
+    @Test
+    public void firstPreparationAttemptStartsImmediately() {
+        org.junit.Assert.assertTrue(
+                PunchPreparationPolicy.shouldStartRetry(0L, 1_000L, 10_000L));
+    }
+
+    @Test
+    public void repeatedPreparationAttemptIsThrottled() {
+        org.junit.Assert.assertFalse(
+                PunchPreparationPolicy.shouldStartRetry(1_000L, 5_000L, 10_000L));
+        org.junit.Assert.assertTrue(
+                PunchPreparationPolicy.shouldStartRetry(1_000L, 11_000L, 10_000L));
+    }
+
+    @Test
+    public void clockRollbackDoesNotBlockRecovery() {
+        org.junit.Assert.assertTrue(
+                PunchPreparationPolicy.shouldStartRetry(20_000L, 10_000L, 10_000L));
+    }
 }

@@ -32,6 +32,9 @@ import java.util.concurrent.Executors;
 public class PunchApplication extends Application {
     private static final String TAG = "PunchApplication";
     private static final long FACE_SDK_READY_TIMEOUT_MS = 120_000L;
+    private static final long PUNCH_PREPARATION_RETRY_DELAY_MS = 10_000L;
+    private static final String PUNCH_STATUS_TOKEN_EXPIRED = "登录状态已失效，请重新登录";
+    private static final String PUNCH_STATUS_PREPARATION_CRASHED = "打卡数据准备异常，稍后自动重试";
     private static final long KIOSK_RESTORE_DELAY_MS = 250L;
     private static final long KIOSK_FOREGROUND_WATCHDOG_INTERVAL_MS = 1_000L;
     private static final int MAX_STATUS_HISTORY = 5;
@@ -47,6 +50,7 @@ public class PunchApplication extends Application {
     private volatile boolean faceSdkInitializing;
     private volatile boolean punchDataPreparing;
     private volatile boolean punchDataReady;
+    private volatile long lastPunchPreparationAttemptAt;
     private volatile String punchDataStatus = "正在准备打卡数据...";
     private volatile int punchDataStatusLevel = STATUS_LEVEL_PROGRESS;
     private volatile boolean punchStatusAttention;
@@ -227,33 +231,63 @@ public class PunchApplication extends Application {
                 AppLogger.w(TAG, "Activation preparation failed: " + failureMessage);
                 return;
             }
-            FaceManager.get().init(PunchApplication.this, "idl-license.face-android", new FaceManager.InitCallback() {
-                @Override
-                public void onSuccess() {
-                    faceSdkInitializing = false;
-                    reportStatusEvent("人脸引擎初始化完成", STATUS_LEVEL_SUCCESS);
-                    AppLogger.i(TAG, "Face SDK ready");
-                }
+            try {
+                FaceManager.get().init(PunchApplication.this, "idl-license.face-android", new FaceManager.InitCallback() {
+                    @Override
+                    public void onSuccess() {
+                        faceSdkInitializing = false;
+                        reportStatusEvent("人脸引擎初始化完成", STATUS_LEVEL_SUCCESS);
+                        AppLogger.i(TAG, "Face SDK ready");
+                    }
 
-                @Override
-                public void onError(int code, String msg) {
-                    faceSdkInitializing = false;
-                    markPunchRecognitionFailed("人脸引擎初始化失败");
-                    AppLogger.e(TAG, "Face SDK init error: " + msg);
-                }
-            });
+                    @Override
+                    public void onError(int code, String msg) {
+                        faceSdkInitializing = false;
+                        markPunchRecognitionFailed("人脸引擎初始化失败");
+                        AppLogger.e(TAG, "Face SDK init error: " + msg);
+                    }
+                });
+            } catch (RuntimeException | LinkageError error) {
+                faceSdkInitializing = false;
+                markPunchRecognitionFailed("人脸引擎初始化失败");
+                AppLogger.e(TAG, "Face SDK init crashed", error);
+            }
         });
     }
 
-    public void preparePunchRecognitionData() {
-        if (!SessionManager.get().isTokenValid()) {
-            return;
-        }
+    public synchronized void preparePunchRecognitionData() {
         if (punchDataPreparing || punchDataReady) {
             return;
         }
+        if (!SessionManager.get().isTokenValid()) {
+            if (!PUNCH_STATUS_TOKEN_EXPIRED.equals(punchDataStatus)
+                    || punchDataStatusLevel != STATUS_LEVEL_ERROR) {
+                markPunchRecognitionFailed(PUNCH_STATUS_TOKEN_EXPIRED);
+            }
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (!PunchPreparationPolicy.shouldStartRetry(
+                lastPunchPreparationAttemptAt,
+                now,
+                PUNCH_PREPARATION_RETRY_DELAY_MS
+        )) {
+            return;
+        }
+        lastPunchPreparationAttemptAt = now;
         beginPunchDataPreparation("正在准备打卡数据...");
-        appExecutor.execute(this::runPunchPreparation);
+        try {
+            appExecutor.execute(() -> {
+                try {
+                    runPunchPreparation();
+                } catch (RuntimeException | LinkageError error) {
+                    handlePunchPreparationCrash(error);
+                }
+            });
+        } catch (RuntimeException error) {
+            handlePunchPreparationCrash(error);
+        }
     }
 
     public boolean isPunchRecognitionReady() {
@@ -275,6 +309,7 @@ public class PunchApplication extends Application {
     public void resetPunchRecognitionState() {
         punchDataPreparing = false;
         punchDataReady = false;
+        lastPunchPreparationAttemptAt = 0L;
         punchDataStatus = "正在准备打卡数据...";
         punchDataStatusLevel = STATUS_LEVEL_PROGRESS;
     }
@@ -341,6 +376,7 @@ public class PunchApplication extends Application {
     public void markPunchRecognitionReady(String status) {
         punchDataPreparing = false;
         punchDataReady = true;
+        lastPunchPreparationAttemptAt = 0L;
         pushStatus(status, STATUS_LEVEL_SUCCESS, true, false);
     }
 
@@ -390,6 +426,11 @@ public class PunchApplication extends Application {
         if (!SyncCoordinator.get().rebuildLocalFaceLibrary(this)) {
             markPunchRecognitionFailed("人脸库重建失败，请稍后重试");
         }
+    }
+
+    private void handlePunchPreparationCrash(Throwable error) {
+        AppLogger.e(TAG, "Punch preparation crashed", error);
+        markPunchRecognitionFailed(PUNCH_STATUS_PREPARATION_CRASHED);
     }
 
     private boolean waitForFaceSdkReady() {
